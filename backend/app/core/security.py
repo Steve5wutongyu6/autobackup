@@ -246,6 +246,7 @@ def is_private_ip(ip_address: str) -> bool:
             or parsed_ip in ipaddress.ip_network("172.16.0.0/12")
             or parsed_ip in ipaddress.ip_network("192.168.0.0/16")
             or parsed_ip in ipaddress.ip_network("100.64.0.0/10")
+            or parsed_ip in ipaddress.ip_network("169.254.0.0/16")
         )
     return parsed_ip.is_private
 
