@@ -61,6 +61,33 @@ class CosRepository:
 
         return self.session.get(CosCredential, credential_id)
 
+    def credential_has_bucket_refs(self, credential_id: int) -> bool:
+        """
+        Check whether a credential is still referenced by any bucket.
+
+        Args:
+            credential_id: Credential primary key.
+
+        Returns:
+            True when at least one bucket still uses this credential.
+        """
+
+        statement = select(CosBucket.id).where(CosBucket.credential_id == credential_id).limit(1)
+        return self.session.execute(statement).scalar_one_or_none() is not None
+
+    def delete_credential(self, credential: CosCredential) -> None:
+        """
+        Delete a stored COS credential.
+
+        Args:
+            credential: Credential entity to delete.
+
+        Returns:
+            None. The row is removed from the current session.
+        """
+
+        self.session.delete(credential)
+
     def save_bucket(self, bucket: CosBucket) -> CosBucket:
         """
         Persist a COS bucket definition.
@@ -113,4 +140,3 @@ class CosRepository:
         """
 
         self.session.delete(bucket)
-

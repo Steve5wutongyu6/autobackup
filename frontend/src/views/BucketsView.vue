@@ -2,70 +2,54 @@
   <div>
     <h1 class="view-title">存储桶管理</h1>
     <div class="table-toolbar">
-      <el-button type="primary" @click="saveCredential">新增凭据</el-button>
       <el-button type="success" @click="saveBucket">新增存储桶</el-button>
     </div>
-    <el-row :gutter="24">
-      <el-col :md="10" :span="24">
-        <el-card shadow="never">
-          <template #header>凭据配置</template>
-          <el-form label-position="top">
-            <el-form-item label="凭据名称">
-              <el-input v-model="credentialForm.name" />
-            </el-form-item>
-            <el-form-item label="SecretId">
-              <el-input v-model="credentialForm.secret_id" />
-            </el-form-item>
-            <el-form-item label="SecretKey">
-              <el-input v-model="credentialForm.secret_key" show-password type="password" />
-            </el-form-item>
-            <el-form-item label="Session Token">
-              <el-input v-model="credentialForm.session_token" />
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-col>
-      <el-col :md="14" :span="24">
-        <el-card shadow="never">
-          <template #header>存储桶配置</template>
-          <el-form label-position="top">
-            <el-form-item label="使用凭据">
-              <el-select v-model="bucketForm.credential_id" style="width: 100%">
-                <el-option
-                  v-for="credential in credentials"
-                  :key="credential.id"
-                  :label="credential.name"
-                  :value="credential.id"
-                />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="Bucket Name">
-              <el-input v-model="bucketForm.name" />
-            </el-form-item>
-            <el-form-item label="AppID">
-              <el-input v-model="bucketForm.app_id" />
-            </el-form-item>
-            <el-form-item label="Region">
-              <el-input v-model="bucketForm.region" placeholder="例如 ap-guangzhou" />
-            </el-form-item>
-            <el-form-item label="Endpoint Mode">
-              <el-select v-model="bucketForm.endpoint_mode" style="width: 100%">
-                <el-option label="默认 COS" value="default" />
-                <el-option label="全球加速" value="accelerate" />
-                <el-option label="自定义域名" value="custom" />
-                <el-option label="CDN 域名" value="cdn" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="自定义 Endpoint">
-              <el-input v-model="bucketForm.custom_endpoint" />
-            </el-form-item>
-            <el-form-item>
-              <el-checkbox v-model="bucketForm.user_expected_private_route">期望同地域内网访问</el-checkbox>
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-col>
-    </el-row>
+    <el-alert
+      v-if="credentials.length === 0"
+      title="当前还没有可用凭据，请先前往“凭据管理”创建 COS 凭据。"
+      type="warning"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 16px"
+    />
+    <el-card shadow="never">
+      <template #header>存储桶配置</template>
+      <el-form label-position="top">
+        <el-form-item label="使用凭据">
+          <el-select v-model="bucketForm.credential_id" style="width: 100%">
+            <el-option
+              v-for="credential in credentials"
+              :key="credential.id"
+              :label="credential.name"
+              :value="credential.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Bucket Name">
+          <el-input v-model="bucketForm.name" />
+        </el-form-item>
+        <el-form-item label="AppID">
+          <el-input v-model="bucketForm.app_id" />
+        </el-form-item>
+        <el-form-item label="Region">
+          <el-input v-model="bucketForm.region" placeholder="例如 ap-guangzhou" />
+        </el-form-item>
+        <el-form-item label="Endpoint Mode">
+          <el-select v-model="bucketForm.endpoint_mode" style="width: 100%">
+            <el-option label="默认 COS" value="default" />
+            <el-option label="全球加速" value="accelerate" />
+            <el-option label="自定义域名" value="custom" />
+            <el-option label="CDN 域名" value="cdn" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="自定义 Endpoint">
+          <el-input v-model="bucketForm.custom_endpoint" />
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="bucketForm.user_expected_private_route">期望同地域内网访问</el-checkbox>
+        </el-form-item>
+      </el-form>
+    </el-card>
     <el-table :data="buckets" style="margin-top: 24px" border>
       <el-table-column prop="name" label="Bucket" />
       <el-table-column prop="region" label="地域" />
@@ -92,22 +76,36 @@ import { request } from "../api/http";
 
 const credentials = ref([]);
 const buckets = ref([]);
-const credentialForm = reactive({
-  name: "",
-  secret_id: "",
-  secret_key: "",
-  session_token: ""
-});
-const bucketForm = reactive({
-  credential_id: null,
-  name: "",
-  app_id: "",
-  region: "",
-  endpoint_mode: "default",
-  custom_endpoint: "",
-  use_https: true,
-  user_expected_private_route: false
-});
+const bucketForm = reactive(createBucketForm());
+
+/**
+ * Build a fresh bucket form state.
+ *
+ * Returns:
+ *   Default bucket form values.
+ */
+function createBucketForm() {
+  return {
+    credential_id: null,
+    name: "",
+    app_id: "",
+    region: "",
+    endpoint_mode: "default",
+    custom_endpoint: "",
+    use_https: true,
+    user_expected_private_route: false
+  };
+}
+
+/**
+ * Reset the bucket form after a successful save.
+ *
+ * Returns:
+ *   None. The reactive object is updated in place.
+ */
+function resetBucketForm() {
+  Object.assign(bucketForm, createBucketForm());
+}
 
 /**
  * Reload bucket and credential lists from the backend.
@@ -116,29 +114,7 @@ const bucketForm = reactive({
  *   Promise that resolves after both lists are refreshed.
  */
 async function loadData() {
-  [credentials.value, buckets.value] = await Promise.all([
-    request("/api/cos/credentials"),
-    request("/api/cos/buckets")
-  ]);
-}
-
-/**
- * Persist a new COS credential.
- *
- * Returns:
- *   Promise that resolves after the credential is saved and the list is refreshed.
- */
-async function saveCredential() {
-  try {
-    await request("/api/cos/credentials", {
-      method: "POST",
-      body: JSON.stringify(credentialForm)
-    });
-    ElMessage.success("凭据已保存");
-    await loadData();
-  } catch (error) {
-    ElMessage.error(error.message);
-  }
+  [credentials.value, buckets.value] = await Promise.all([request("/api/cos/credentials"), request("/api/cos/buckets")]);
 }
 
 /**
@@ -154,6 +130,7 @@ async function saveBucket() {
       body: JSON.stringify(bucketForm)
     });
     ElMessage.success("存储桶已保存");
+    resetBucketForm();
     await loadData();
   } catch (error) {
     ElMessage.error(error.message);

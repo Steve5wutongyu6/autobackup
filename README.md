@@ -388,6 +388,7 @@ http://localhost:5173
 | --- | --- | --- |
 | `POST` | `/api/cos/credentials` | 新增 COS 凭据 |
 | `GET` | `/api/cos/credentials` | 查询 COS 凭据 |
+| `DELETE` | `/api/cos/credentials/{credential_id}` | 删除未被引用的 COS 凭据 |
 | `POST` | `/api/cos/buckets` | 新增存储桶 |
 | `GET` | `/api/cos/buckets` | 查询存储桶 |
 | `PUT` | `/api/cos/buckets/{bucket_id}` | 修改存储桶 |

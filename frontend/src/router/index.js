@@ -4,6 +4,7 @@ import DashboardView from "../views/DashboardView.vue";
 import LoginView from "../views/LoginView.vue";
 import ShellLayout from "../views/ShellLayout.vue";
 import BootstrapView from "../views/BootstrapView.vue";
+import CredentialsView from "../views/CredentialsView.vue";
 import BucketsView from "../views/BucketsView.vue";
 import TasksView from "../views/TasksView.vue";
 import ArtifactsView from "../views/ArtifactsView.vue";
@@ -22,6 +23,7 @@ const router = createRouter({
       children: [
         { path: "", component: DashboardView },
         { path: "bootstrap", component: BootstrapView },
+        { path: "credentials", component: CredentialsView },
         { path: "buckets", component: BucketsView },
         { path: "tasks", component: TasksView },
         { path: "artifacts", component: ArtifactsView },

@@ -86,6 +86,36 @@ class CosService:
 
         return self.repository.list_credentials()
 
+    def delete_credential(self, credential_id: int) -> None:
+        """
+        Delete a stored COS credential that is no longer used by any bucket.
+
+        Args:
+            credential_id: Credential primary key.
+
+        Returns:
+            None. The credential row is removed.
+
+        Raises:
+            ValueError: Raised when the credential does not exist or is still referenced.
+        """
+
+        credential = self.repository.get_credential(credential_id)
+        if not credential:
+            raise ValueError("COS credential not found")
+        if self.repository.credential_has_bucket_refs(credential_id):
+            raise ValueError("Credential is still referenced by one or more buckets")
+
+        self.repository.delete_credential(credential)
+        self.log_service.audit(
+            action="cos.credential_delete",
+            actor="admin",
+            target_type="cos_credential",
+            target_id=str(credential.id),
+            outcome="success",
+            detail=f"Credential {credential.name} deleted.",
+        )
+
     def create_or_update_bucket(self, bucket_id: int | None, payload: dict[str, object]) -> CosBucket:
         """
         Create or update a COS bucket definition.
@@ -378,4 +408,3 @@ class CosService:
             Key=replica.object_key,
             DestFilePath=destination_path,
         )
-

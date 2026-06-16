@@ -59,6 +59,31 @@ def list_credentials(_: int = Depends(require_admin), session: Session = Depends
     return [CosCredentialResponse.model_validate(item) for item in CosService(session).list_credentials()]
 
 
+@router.delete("/credentials/{credential_id}", response_model=ApiMessage)
+def delete_credential(
+    credential_id: int,
+    _: int = Depends(require_admin),
+    session: Session = Depends(get_db),
+) -> ApiMessage:
+    """
+    Delete an unused COS credential.
+
+    Args:
+        credential_id: Credential primary key.
+        _: Authenticated administrator ID.
+        session: Active SQLAlchemy session.
+
+    Returns:
+        Success message.
+    """
+
+    try:
+        CosService(session).delete_credential(credential_id)
+        return ApiMessage(message="Credential deleted")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @router.post("/buckets", response_model=CosBucketResponse)
 def create_bucket(
     payload: CosBucketCreateRequest,
@@ -174,4 +199,3 @@ def delete_bucket(
         return ApiMessage(message="Bucket deleted")
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-
