@@ -77,6 +77,7 @@ async function handleLogin() {
     ElMessage.success("密码已校验，请完成二次验证");
     if (authStore.challenge?.methods?.includes("bootstrap")) {
       router.push("/bootstrap");
+      return;
     }
   } catch (error) {
     ElMessage.error(error.message);

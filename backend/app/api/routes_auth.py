@@ -135,3 +135,24 @@ def refresh(payload: RefreshRequest, session: Session = Depends(get_db)) -> Toke
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
+
+@router.post("/bootstrap/finalize", response_model=TokenPairResponse)
+def finalize_bootstrap(payload: dict, session: Session = Depends(get_db)) -> TokenPairResponse:
+    """
+    Exchange a bootstrap-only token for a full access session after first-run setup.
+
+    Args:
+        payload: Dictionary containing bootstrap_access_token.
+        session: Active SQLAlchemy session.
+
+    Returns:
+        Access and refresh token pair.
+    """
+
+    try:
+        result = AuthService(session).finalize_bootstrap_login(
+            str(payload.get("bootstrap_access_token", ""))
+        )
+        return TokenPairResponse(**result)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error

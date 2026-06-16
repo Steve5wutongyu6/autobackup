@@ -60,3 +60,35 @@ def require_admin(
     AuthService(session).ensure_bootstrap_admin()
     return int(payload["sub"])
 
+
+def require_bootstrap_or_admin(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session: Session = Depends(get_db),
+) -> int:
+    """
+    Validate either a full access token or a bootstrap-only token.
+
+    Args:
+        credentials: Bearer credentials extracted from the request.
+        session: Active SQLAlchemy session used to ensure bootstrap state.
+
+    Returns:
+        Administrator primary key from the supplied token.
+
+    Raises:
+        HTTPException: Raised when the request is unauthenticated or token type is invalid.
+    """
+
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        payload = parse_jwt_token(credentials.credentials)
+    except Exception as error:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {error}") from error
+
+    if payload.get("type") not in {"access", "bootstrap_access"}:
+        raise HTTPException(status_code=401, detail="Invalid token type")
+
+    AuthService(session).ensure_bootstrap_admin()
+    return int(payload["sub"])

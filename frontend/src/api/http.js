@@ -8,11 +8,12 @@ const API_BASE = import.meta.env.VITE_API_BASE || "";
  */
 function buildHeaders() {
   const token = window.localStorage.getItem("access_token");
+  const bootstrapToken = window.localStorage.getItem("bootstrap_access_token");
   const headers = {
     "Content-Type": "application/json"
   };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  if (token || bootstrapToken) {
+    headers.Authorization = `Bearer ${token || bootstrapToken}`;
   }
   return headers;
 }
@@ -53,4 +54,3 @@ export async function request(path, options = {}) {
   }
   return await response.json();
 }
-

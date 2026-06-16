@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_admin
+from app.api.deps import get_db, require_admin, require_bootstrap_or_admin
 from app.schemas.admin import AdminProfileResponse, BootstrapCompleteRequest, PasskeyListItem
 from app.schemas.admin import TotpConfirmRequest, TotpSetupResponse, UpdateAdminProfileRequest
 from app.schemas.admin import UpdatePasswordRequest
@@ -17,7 +17,11 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 @router.post("/bootstrap/complete", response_model=ApiMessage)
-def complete_bootstrap(payload: BootstrapCompleteRequest, session: Session = Depends(get_db)) -> ApiMessage:
+def complete_bootstrap(
+    payload: BootstrapCompleteRequest,
+    _: int = Depends(require_bootstrap_or_admin),
+    session: Session = Depends(get_db),
+) -> ApiMessage:
     """
     Complete initial admin credential rotation.
 
@@ -97,7 +101,10 @@ def update_password(
 
 
 @router.post("/totp/setup", response_model=TotpSetupResponse)
-def totp_setup(_: int = Depends(require_admin), session: Session = Depends(get_db)) -> TotpSetupResponse:
+def totp_setup(
+    _: int = Depends(require_bootstrap_or_admin),
+    session: Session = Depends(get_db),
+) -> TotpSetupResponse:
     """
     Start TOTP enrollment.
 
@@ -115,7 +122,7 @@ def totp_setup(_: int = Depends(require_admin), session: Session = Depends(get_d
 @router.post("/totp/confirm", response_model=ApiMessage)
 def totp_confirm(
     payload: TotpConfirmRequest,
-    _: int = Depends(require_admin),
+    _: int = Depends(require_bootstrap_or_admin),
     session: Session = Depends(get_db),
 ) -> ApiMessage:
     """
@@ -157,7 +164,7 @@ def totp_delete(_: int = Depends(require_admin), session: Session = Depends(get_
 @router.post("/passkeys/register/options", response_model=dict)
 def passkey_register_options(
     payload: dict,
-    _: int = Depends(require_admin),
+    _: int = Depends(require_bootstrap_or_admin),
     session: Session = Depends(get_db),
 ) -> dict:
     """
@@ -178,7 +185,7 @@ def passkey_register_options(
 @router.post("/passkeys/register/verify", response_model=ApiMessage)
 def passkey_register_verify(
     payload: dict,
-    _: int = Depends(require_admin),
+    _: int = Depends(require_bootstrap_or_admin),
     session: Session = Depends(get_db),
 ) -> ApiMessage:
     """
@@ -251,4 +258,3 @@ def delete_passkey(
         return ApiMessage(message="Passkey deleted")
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-

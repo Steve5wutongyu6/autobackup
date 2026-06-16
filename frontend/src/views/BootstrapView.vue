@@ -115,6 +115,7 @@ async function confirmTotp() {
     ElMessage.success("TOTP 已启用");
     await authStore.loadBootstrapStatus();
     if (!authStore.bootstrapStatus?.must_bootstrap) {
+      await authStore.finalizeBootstrapLogin();
       router.push("/");
     }
   } catch (error) {
@@ -147,6 +148,7 @@ async function registerPasskey() {
     ElMessage.success("Passkey 已启用");
     await authStore.loadBootstrapStatus();
     if (!authStore.bootstrapStatus?.must_bootstrap) {
+      await authStore.finalizeBootstrapLogin();
       router.push("/");
     }
   } catch (error) {

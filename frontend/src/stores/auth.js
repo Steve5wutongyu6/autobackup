@@ -9,6 +9,7 @@ export const useAuthStore = defineStore("auth", {
   state: () => ({
     accessToken: window.localStorage.getItem("access_token"),
     refreshToken: window.localStorage.getItem("refresh_token"),
+    bootstrapAccessToken: window.localStorage.getItem("bootstrap_access_token"),
     bootstrapStatus: null,
     challenge: null
   }),
@@ -21,6 +22,16 @@ export const useAuthStore = defineStore("auth", {
      */
     isAuthenticated(state) {
       return Boolean(state.accessToken);
+    },
+
+    /**
+     * Check whether the user currently has a bootstrap-only setup session.
+     *
+     * Returns:
+     *   True when a bootstrap token exists in local state.
+     */
+    hasBootstrapSession(state) {
+      return Boolean(state.bootstrapAccessToken);
     }
   },
   actions: {
@@ -37,8 +48,24 @@ export const useAuthStore = defineStore("auth", {
     setSession(accessToken, refreshToken) {
       this.accessToken = accessToken;
       this.refreshToken = refreshToken;
+       this.bootstrapAccessToken = null;
       window.localStorage.setItem("access_token", accessToken);
       window.localStorage.setItem("refresh_token", refreshToken);
+      window.localStorage.removeItem("bootstrap_access_token");
+    },
+
+    /**
+     * Persist a bootstrap-only setup token to local storage.
+     *
+     * Args:
+     *   bootstrapAccessToken: Temporary token used only during first-run setup.
+     *
+     * Returns:
+     *   None. Store state and local storage are updated.
+     */
+    setBootstrapSession(bootstrapAccessToken) {
+      this.bootstrapAccessToken = bootstrapAccessToken;
+      window.localStorage.setItem("bootstrap_access_token", bootstrapAccessToken);
     },
 
     /**
@@ -50,9 +77,11 @@ export const useAuthStore = defineStore("auth", {
     logout() {
       this.accessToken = null;
       this.refreshToken = null;
+      this.bootstrapAccessToken = null;
       this.challenge = null;
       window.localStorage.removeItem("access_token");
       window.localStorage.removeItem("refresh_token");
+      window.localStorage.removeItem("bootstrap_access_token");
     },
 
     /**
@@ -81,6 +110,9 @@ export const useAuthStore = defineStore("auth", {
         method: "POST",
         body: JSON.stringify({ username, password })
       });
+      if (this.challenge?.bootstrap_access_token) {
+        this.setBootstrapSession(this.challenge.bootstrap_access_token);
+      }
       return this.challenge;
     },
 
@@ -103,7 +135,23 @@ export const useAuthStore = defineStore("auth", {
       });
       this.setSession(result.access_token, result.refresh_token);
       return result;
+    },
+
+    /**
+     * Exchange the bootstrap-only token for a normal access session.
+     *
+     * Returns:
+     *   Final token pair.
+     */
+    async finalizeBootstrapLogin() {
+      const result = await request("/api/auth/bootstrap/finalize", {
+        method: "POST",
+        body: JSON.stringify({
+          bootstrap_access_token: this.bootstrapAccessToken
+        })
+      });
+      this.setSession(result.access_token, result.refresh_token);
+      return result;
     }
   }
 });
-

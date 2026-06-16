@@ -137,6 +137,19 @@ class AuthService:
             "refresh_token": build_jwt_token(str(admin_id), "refresh", settings.refresh_ttl_minutes),
         }
 
+    def _build_bootstrap_access_token(self, admin_id: int) -> str:
+        """
+        Build a temporary bootstrap-only token for first-run setup flows.
+
+        Args:
+            admin_id: Administrator primary key.
+
+        Returns:
+            Signed JWT token that only authorizes bootstrap actions.
+        """
+
+        return build_jwt_token(str(admin_id), "bootstrap_access", 30)
+
     def login(self, username: str, password: str) -> dict[str, object]:
         """
         Validate username and password and start the second-factor flow.
@@ -188,11 +201,14 @@ class AuthService:
             outcome="success",
             detail="Password stage completed.",
         )
-        return {
+        login_result = {
             "challenge_token": challenge_token,
             "methods": methods,
             "must_bootstrap": self._must_complete_bootstrap(admin),
         }
+        if self._must_complete_bootstrap(admin) and methods == ["bootstrap"]:
+            login_result["bootstrap_access_token"] = self._build_bootstrap_access_token(admin.id)
+        return login_result
 
     def verify_totp_login(self, challenge_token: str, code: str) -> dict[str, str]:
         """
@@ -259,6 +275,29 @@ class AuthService:
         payload = parse_jwt_token(refresh_token)
         if payload.get("type") != "refresh":
             raise ValueError("Invalid refresh token")
+        return self._build_access_pair(int(payload["sub"]))
+
+    def finalize_bootstrap_login(self, bootstrap_access_token: str) -> dict[str, str]:
+        """
+        Exchange a bootstrap-only token for a full access session after setup completes.
+
+        Args:
+            bootstrap_access_token: Temporary bootstrap token issued after password validation.
+
+        Returns:
+            Full access and refresh token pair.
+
+        Raises:
+            ValueError: Raised when the token is invalid or bootstrap is not complete yet.
+        """
+
+        payload = parse_jwt_token(bootstrap_access_token)
+        if payload.get("type") != "bootstrap_access":
+            raise ValueError("Invalid bootstrap token")
+
+        admin = self.ensure_bootstrap_admin()
+        if self._must_complete_bootstrap(admin):
+            raise ValueError("Bootstrap is not complete")
         return self._build_access_pair(int(payload["sub"]))
 
     def complete_bootstrap(self, username: str, password: str) -> AdminAccount:

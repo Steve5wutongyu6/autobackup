@@ -60,6 +60,10 @@ router.beforeEach(async (to, _from, next) => {
     next();
     return;
   }
+  if (to.path === "/bootstrap" && authStore.hasBootstrapSession) {
+    next();
+    return;
+  }
   if (!authStore.isAuthenticated) {
     next("/login");
     return;
@@ -72,4 +76,3 @@ router.beforeEach(async (to, _from, next) => {
 });
 
 export default router;
-
