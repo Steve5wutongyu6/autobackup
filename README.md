@@ -4,7 +4,7 @@
 
 `AutoBackup` 是一个基于 `FastAPI + PostgreSQL + Vue3 + Element Plus` 实现的自动备份系统，主要用于对服务器指定目录进行定时打包、上传腾讯云 COS，并提供后台管理、恢复、日志审计等功能。
 
-这个项目的目标比较直接：
+该项目用于：
 
 1. 定时备份服务器目录
 2. 将备份文件上传到一个或多个 COS 存储桶
@@ -12,7 +12,6 @@
 4. 尽量优先走 COS 内网，避免公网下载费用
 5. 提供管理员后台、双因素登录和操作日志
 
-前后端均已拆分，整体通过 `docker compose` 方式启动，适合本地开发和小型服务器部署。
 
 ## 二、主要功能
 
@@ -125,8 +124,6 @@ autobackup
 2. `Docker Compose`
 3. `Nginx`
 
-> 当前 Docker 文件和 `docker-compose.yml` 中显式使用了 `linux/amd64`。  
-> 如果宿主机是 Apple Silicon，这套配置就是按交叉构建 x64 镜像来写的。
 
 ## 五、运行前说明
 
