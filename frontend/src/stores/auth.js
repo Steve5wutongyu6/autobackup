@@ -48,7 +48,8 @@ export const useAuthStore = defineStore("auth", {
     setSession(accessToken, refreshToken) {
       this.accessToken = accessToken;
       this.refreshToken = refreshToken;
-       this.bootstrapAccessToken = null;
+      this.bootstrapAccessToken = null;
+      this.challenge = null;
       window.localStorage.setItem("access_token", accessToken);
       window.localStorage.setItem("refresh_token", refreshToken);
       window.localStorage.removeItem("bootstrap_access_token");
@@ -65,6 +66,7 @@ export const useAuthStore = defineStore("auth", {
      */
     setBootstrapSession(bootstrapAccessToken) {
       this.bootstrapAccessToken = bootstrapAccessToken;
+      this.challenge = null;
       window.localStorage.setItem("bootstrap_access_token", bootstrapAccessToken);
     },
 
