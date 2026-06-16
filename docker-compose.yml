@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    platform: linux/amd64
+    environment:
+      POSTGRES_DB: autobackup
+      POSTGRES_USER: autobackup
+      POSTGRES_PASSWORD: autobackup
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autobackup -d autobackup"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+    platform: linux/amd64
+    environment:
+      DATABASE_URL: postgresql+psycopg://autobackup:autobackup@postgres:5432/autobackup
+      APP_MASTER_KEY: change-this-master-key
+      JWT_SECRET: change-this-jwt-secret
+      BOOTSTRAP_ADMIN_USERNAME: admin
+      BOOTSTRAP_ADMIN_PASSWORD: change-me-now
+      BACKUP_ALLOWED_ROOTS: /data
+      BACKUP_TEMP_DIR: /tmp/autobackup
+      CORS_ORIGINS: http://localhost:8080,http://localhost
+      WEBAUTHN_RP_ID: localhost
+      WEBAUTHN_RP_NAME: AutoBackup
+      WEBAUTHN_EXPECTED_ORIGINS: http://localhost:8080,http://localhost:5173,http://127.0.0.1:8080,http://127.0.0.1:5173
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./runtime-data:/data
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+    platform: linux/amd64
+    command: ["python", "-m", "app.workers.scheduler"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://autobackup:autobackup@postgres:5432/autobackup
+      APP_MASTER_KEY: change-this-master-key
+      JWT_SECRET: change-this-jwt-secret
+      BOOTSTRAP_ADMIN_USERNAME: admin
+      BOOTSTRAP_ADMIN_PASSWORD: change-me-now
+      BACKUP_ALLOWED_ROOTS: /data
+      BACKUP_TEMP_DIR: /tmp/autobackup
+      CORS_ORIGINS: http://localhost:8080,http://localhost
+      WEBAUTHN_RP_ID: localhost
+      WEBAUTHN_RP_NAME: AutoBackup
+      WEBAUTHN_EXPECTED_ORIGINS: http://localhost:8080,http://localhost:5173,http://127.0.0.1:8080,http://127.0.0.1:5173
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      - ./runtime-data:/data
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      platforms:
+        - linux/amd64
+    platform: linux/amd64
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:

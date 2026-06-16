@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=80.9.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autobackup-backend"
+version = "0.1.0"
+description = "AutoBackup backend service"
+requires-python = ">=3.14"
+dependencies = [
+  "alembic>=1.16.2",
+  "apscheduler>=3.10.4",
+  "argon2-cffi>=23.1.0",
+  "pydantic>=2.11.7",
+  "cryptography>=45.0.4",
+  "email-validator>=2.2.0",
+  "fastapi>=0.116.1",
+  "httpx>=0.28.1",
+  "psycopg[binary]>=3.2.9",
+  "pyjwt>=2.10.1",
+  "pyotp>=2.9.0",
+  "pyzipper>=0.3.6",
+  "python-multipart>=0.0.20",
+  "cos-python-sdk-v5>=1.9.38",
+  "sqlalchemy>=2.0.41",
+  "uvicorn[standard]>=0.35.0",
+  "webauthn>=2.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

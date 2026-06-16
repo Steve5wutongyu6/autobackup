@@ -1,0 +1,599 @@
+## 相关资源
+- 对象存储的 XML Python SDK 源码下载地址：[XML Python SDK](https://github.com/tencentyun/cos-python-sdk-v5)。
+
+- SDK 快速下载地址：[XML Python SDK](https://cos-sdk-archive-1253960454.file.myqcloud.com/cos-python-sdk-v5/latest/cos-python-sdk-v5.zip)。
+
+- 演示示例 Demo 下载地址：[XML Python Demo](https://github.com/tencentyun/cos-python-sdk-v5/blob/master/demo/demo.py)。
+
+- SDK 文档中的所有示例代码请参见 [SDK 代码示例](https://github.com/tencentyun/cos-python-sdk-v5/tree/master/demo)。
+
+- SDK 更新日志请参见 [ChangeLog](https://github.com/tencentyun/cos-python-sdk-v5/blob/master/CHANGELOG.md)。
+
+- SDK 常见问题请参见：[Python SDK 常见问题](https://www.tencentcloud.com/document/product/436/42375)。
+   
+
+   > **说明：**
+   > 
+
+   > 如果您在使用 XML 版本 SDK 时遇到函数或方法不存在等错误，请先将 XML 版本 SDK 升级到最新版再重试。
+   > 
+
+
+## 环境配置与准备
+
+对象存储的 XML Python SDK  目前可以支持 Python 2.7以及 Python 3.4及以上。
+
+> **说明：**
+> 
+
+> 关于文章中出现的 SecretId、SecretKey、Bucket、Region 等名称的含义和获取方式请参见 [COS 术语信息](https://www.tencentcloud.com/document/product/436/7751#.E6.9C.AF.E8.AF.AD.E4.BF.A1.E6.81.AF)。
+> 
+
+
+## 安装 SDK
+
+安装 SDK 有三种安装方式：pip 安装、手动安装和离线安装。
+
+### 方式一：使用 pip 安装（推荐）
+``` sh
+ pip install -U cos-python-sdk-v5
+```
+
+### 方式二：手动安装
+
+从 [XML Python SDK](https://github.com/tencentyun/cos-python-sdk-v5) 下载源码，通过 setup 手动安装，执行以下命令：
+``` python
+ python setup.py install
+```
+
+### 方式三：离线安装
+``` python
+# 在有外网的机器下运行如下命令
+mkdir cos-python-sdk-packages
+pip download cos-python-sdk-v5 -d cos-python-sdk-packages
+tar -czvf cos-python-sdk-packages.tar.gz cos-python-sdk-packages
+# 将安装包拷贝到没有外网的机器后运行如下命令
+# 请确保两台机器的 Python 版本保持一致，否则会出现安装失败的情况
+tar -xzvf cos-python-sdk-packages.tar.gz
+pip install cos-python-sdk-v5 --no-index -f cos-python-sdk-packages
+```
+
+## 初始化 COS 服务
+
+下面为您介绍如何使用 COS Python SDK 初始化客户端后完成一个基础操作，例如创建存储桶、查询存储桶列表、上传对象、查询对象列表、下载对象和删除对象。
+
+### 初始化 COS
+
+> **注意：**
+> 
+> - 建议用户使用子账号密钥 + 环境变量的方式调用 SDK，提高 SDK 使用的安全性。为子账号授权时，请遵循 [最小权限指引原则](https://www.tencentcloud.com/document/product/436/32972)，防止泄露目标存储桶或对象之外的资源。
+> - 如果您一定要使用永久密钥，建议遵循 [最小权限指引原则](https://www.tencentcloud.com/document/product/436/32972) 对永久密钥的权限范围进行限制。
+
+
+下面介绍几种初始化 Python SDK Client 的方式，您可以根据具体场景选择其中一种。默认使用 COS 默认域名初始化访问。
+
+#### 通过默认域名初始化
+
+
+
+【COS 默认域名初始化】
+
+通过 COS 默认域名访问时，SDK 会以 **{bucket-appid}.cos.{region}.myqcloud.com** 的域名形式访问 COS。
+
+> **注意：**
+> 
+
+> 正常情况下一个 region 只需要生成一个 CosS3Client 实例，然后循环上传或下载对象，不能每次访问都生成 CosS3Client 实例，否则 Python 进程会占用过多的连接和线程。
+> 
+
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见 https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+```
+
+【COS 默认域名临时密钥初始化】
+
+> **说明：**
+> 
+
+> 关于临时密钥如何生成和使用，请参见 [临时密钥生成及使用指引](https://www.tencentcloud.com/document/product/436/14048)。
+> 
+
+
+通过 COS 默认域名访问时，SDK 会以 **{bucket-appid}.cos.{region}.myqcloud.com** 的域名形式访问 COS。
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用INFO，需要定位时可以修改为DEBUG，此时SDK会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region 等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+tmp_secret_id = 'TmpSecretId'     # 临时密钥的 SecretId，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+tmp_secret_key = 'TmpSecretKey'   # 临时密钥的 SecretKey，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+token = 'TmpToken'                # 临时密钥的 Token，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见https://cloud.tencent.com/document/product/436/6224
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=tmp_secret_id, SecretKey=tmp_secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+```
+
+【COS 默认域名和代理初始化】
+
+当需要通过代理访问 COS 时配置，否则跳过。
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见 https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+proxies = {
+    'http': '127.0.0.1:80',  # 替换为用户的 HTTP 代理地址
+    'https': '127.0.0.1:443' # 替换为用户的 HTTPS 代理地址
+}
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Proxies=proxies)
+client = CosS3Client(config)
+```
+
+#### 通过其它域名初始化
+
+
+
+【全球加速域名】
+
+通过 COS 全球加速域名访问时，SDK 会以 **{bucket-appid}.cos.accelerate.myqcloud.com** 的域名形式访问 COS，region 不会出现在访问域名中。
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = None              # 通过 Endpoint 初始化不需要配置 region
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+endpoint = 'cos.accelerate.myqcloud.com' # 替换为用户的 endpoint 或者 cos 全局加速域名，如果使用桶的全球加速域名，需要先开启桶的全球加速功能，请参见 https://cloud.tencent.com/document/product/436/38864
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Endpoint=endpoint, Scheme=scheme)
+client = CosS3Client(config)
+```
+
+【自定义源站域名】
+
+通过自定义域名访问时，SDK 会使用配置的**用户域名**直接访问 COS，bucket 和 region 都不会出现在访问域名中。
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region 等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = None              # 通过自定义域名初始化不需要配置 region
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+domain = 'user-define.example.com' # 用户自定义域名，需要先开启桶的自定义域名，具体请参见 https://cloud.tencent.com/document/product/436/36638
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Domain=domain, Scheme=scheme)
+client = CosS3Client(config)
+```
+
+【默认 CDN 加速域名】
+
+通过 CDN 默认域名访问时，SDK 会以 **{bucket-appid}.file.myqcloud.com** 的域名形式访问 **CDN**，由 CDN 服务回源访问 COS。
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = None              # 通过 Endpoint 初始化不需要配置 region
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+endpoint = 'file.myqcloud.com' # 替换为用户的 CDN 默认加速域名，需要开通 CDN 加速配置，参见 https://cloud.tencent.com/document/product/436/18670
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Endpoint=endpoint, Scheme=scheme)
+client = CosS3Client(config)
+```
+
+【自定义 CDN 加速域名】
+
+通过 CDN 自定义域名访问时，SDK 会使用配置的**用户域名**直接访问 **CDN**，bucket 和 region 都不会出现在访问域名中，由 CDN 服务回源访问 COS。
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在CosConfig中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = None              # 通过自定义域名初始化不需要配置 region
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+domain = 'user-define.example-cdn.com' # 用户自定义 CDN 域名，需要开通 CDN 自定义域名加速，参见 https://cloud.tencent.com/document/product/436/18670
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Domain=domain, Scheme=scheme)
+client = CosS3Client(config)
+```
+
+### 访问 COS 服务
+
+
+
+【创建存储桶】
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见 https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+
+response = client.create_bucket(
+    Bucket='examplebucket-1250000000'
+)
+```
+
+【查询存储桶列表】
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region 等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见 https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+
+response = client.list_buckets(
+)
+```
+
+【上传对象】
+
+> **注意：**
+> 
+
+> 简单上传不支持超过5G的文件，推荐使用下方高级上传接口。参数说明可参见 [对象操作](https://www.tencentcloud.com/document/product/436/46468) 文档。
+> 
+
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见 https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+
+#### 文件流简单上传（不支持超过5G的文件，推荐使用下方高级上传接口）
+# 强烈建议您以二进制模式(binary mode)打开文件,否则可能会导致错误
+with open('picture.jpg', 'rb') as fp:
+    response = client.put_object(
+        Bucket='examplebucket-1250000000',
+        Body=fp,
+        Key='picture.jpg',
+        StorageClass='STANDARD',
+        EnableMD5=False
+    )
+print(response['ETag'])
+
+#### 字节流简单上传
+response = client.put_object(
+    Bucket='examplebucket-1250000000',
+    Body=b'bytes',
+    Key='picture.jpg',
+    EnableMD5=False
+)
+print(response['ETag'])
+
+
+#### chunk 简单上传
+import requests
+stream = requests.get('https://cloud.tencent.com/document/product/436/7778')
+
+# 网络流将以 Transfer-Encoding:chunked 的方式传输到 COS
+response = client.put_object(
+    Bucket='examplebucket-1250000000',
+    Body=stream,
+    Key='picture.jpg'
+)
+print(response['ETag'])
+
+#### 高级上传接口（推荐）
+# 根据文件大小自动选择简单上传或分块上传，分块上传具备断点续传功能。
+response = client.upload_file(
+    Bucket='examplebucket-1250000000',
+    LocalFilePath='local.txt',
+    Key='picture.jpg',
+    PartSize=1,
+    MAXThread=10,
+    EnableMD5=False
+)
+print(response['ETag'])
+```
+
+【查询对象列表】
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region 等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+
+response = client.list_objects(
+    Bucket='examplebucket-1250000000',
+    Prefix='folder1'
+)
+```
+
+单次调用 `list_objects` 接口只能查询1000个对象，如需要查询所有的对象，则需要循环调用。
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的region可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+
+marker = ""
+while True:
+    response = client.list_objects(
+        Bucket='examplebucket-1250000000',
+        Prefix='folder1',
+        Marker=marker
+    )
+    if 'Contents' in response:
+        print(response['Contents'])
+    if response['IsTruncated'] == 'false':
+        break 
+    marker = response['NextMarker']
+```
+
+【下载对象】
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的region可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见 https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+
+####  获取文件到本地
+response = client.get_object(
+    Bucket='examplebucket-1250000000',
+    Key='picture.jpg'
+)
+response['Body'].get_stream_to_file('output.txt')
+
+#### 获取文件流
+response = client.get_object(
+    Bucket='examplebucket-1250000000',
+    Key='picture.jpg'
+)
+fp = response['Body'].get_raw_stream()
+print(fp.read(2))
+
+#### 设置 Response HTTP 头部
+response = client.get_object(
+    Bucket='examplebucket-1250000000',
+    Key='picture.jpg',
+    ResponseContentType='text/html; charset=utf-8'
+)
+print(response['Content-Type'])
+fp = response['Body'].get_raw_stream()
+print(fp.read(2))
+
+#### 指定下载范围
+response = client.get_object(
+    Bucket='examplebucket-1250000000',
+    Key='picture.jpg',
+    Range='bytes=0-10'
+)
+fp = response['Body'].get_raw_stream()
+print(fp.read())
+```
+
+【删除对象】
+
+> **注意：**
+> 
+
+> 对象被删除后，其对应的数据将无法再被访问。
+> 
+
+``` python
+# -*- coding=utf-8
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
+import sys
+import os
+import logging
+
+# 正常情况日志级别使用 INFO，需要定位时可以修改为 DEBUG，此时 SDK 会打印和服务端的通信信息
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# 1. 设置用户属性, 包括 secret_id, secret_key, region等。Appid 已在 CosConfig 中移除，请在参数 Bucket 中带上 Appid。Bucket 由 BucketName-Appid 组成
+secret_id = os.environ['COS_SECRET_ID']     # 用户的 SecretId，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+secret_key = os.environ['COS_SECRET_KEY']   # 用户的 SecretKey，建议使用子账号密钥，授权遵循最小权限指引，降低使用风险。子账号密钥获取可参见 https://cloud.tencent.com/document/product/598/37140
+region = 'ap-beijing'      # 替换为用户的 region，已创建桶归属的 region 可以在控制台查看，https://console.cloud.tencent.com/cos5/bucket
+                           # COS 支持的所有 region 列表参见 https://cloud.tencent.com/document/product/436/6224
+token = None               # 如果使用永久密钥不需要填入 token，如果使用临时密钥需要填入，临时密钥生成和使用指引参见 https://www.tencentcloud.com/document/product/436/14048
+scheme = 'https'           # 指定使用 http/https 协议来访问 COS，默认为 https，可不填
+
+config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme=scheme)
+client = CosS3Client(config)
+
+# 删除object
+## deleteObject
+response = client.delete_object(
+    Bucket='examplebucket-1250000000',
+    Key='exampleobject'
+)
+
+# 删除多个 object
+## deleteObjects
+response = client.delete_objects(
+    Bucket='examplebucket-1250000000',
+    Delete={
+        'Object': [
+            {
+                'Key': 'exampleobject1'
+            },
+            {
+                'Key': 'exampleobject2'
+            },
+        ],
+        'Quiet': 'true' # 指明删除的返回结果方式，可选值为 true、false
+    }
+)
+```
+
+## 常见问题
+
+您在使用过程中可能会碰到的一些常见问题，相关的解决办法可参见 [Python SDK 常见问题](https://www.tencentcloud.com/document/product/436/42375)。

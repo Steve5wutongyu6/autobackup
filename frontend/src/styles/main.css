@@ -1,0 +1,57 @@
+:root {
+  color-scheme: light;
+  --page-bg: linear-gradient(180deg, #f6f5ee 0%, #edf2ea 100%);
+  --panel-bg: rgba(255, 255, 255, 0.88);
+  --panel-border: rgba(30, 52, 40, 0.08);
+  --accent: #195d47;
+  --accent-soft: #d6eadf;
+  --danger: #b3402a;
+  --text-main: #1f2924;
+  --text-muted: #61716a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "PingFang SC", "Helvetica Neue", sans-serif;
+  background: var(--page-bg);
+  color: var(--text-main);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.page-shell {
+  min-height: 100vh;
+}
+
+.panel-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 20px;
+  box-shadow: 0 20px 50px rgba(25, 40, 32, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.view-title {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 900px) {
+  .table-toolbar {
+    flex-direction: column;
+  }
+}
