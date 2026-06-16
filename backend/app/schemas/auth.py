@@ -26,11 +26,13 @@ class LoginChallengeResponse(BaseModel):
         challenge_token: Short-lived token binding the second-factor flow.
         methods: Enabled second-factor methods for the admin account.
         must_bootstrap: Whether the admin must complete first-run hardening.
+        bootstrap_access_token: Temporary token only used during first-run bootstrap.
     """
 
     challenge_token: str
     methods: list[str]
     must_bootstrap: bool
+    bootstrap_access_token: str | None = None
 
 
 class TotpVerifyRequest(BaseModel):

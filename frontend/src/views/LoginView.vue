@@ -14,7 +14,7 @@
         </el-button>
       </el-form>
 
-      <div v-if="authStore.challenge" style="margin-top: 24px">
+      <div v-if="authStore.challenge && !authStore.challenge?.methods?.includes('bootstrap')" style="margin-top: 24px">
         <el-alert
           title="密码校验已通过，请完成第二因素验证"
           type="success"
@@ -74,11 +74,12 @@ const totpCode = ref("");
 async function handleLogin() {
   try {
     await authStore.login(form.username, form.password);
-    ElMessage.success("密码已校验，请完成二次验证");
     if (authStore.challenge?.methods?.includes("bootstrap")) {
+      ElMessage.success("密码校验通过，请继续完成首次初始化");
       router.push("/bootstrap");
       return;
     }
+    ElMessage.success("密码已校验，请完成二次验证");
   } catch (error) {
     ElMessage.error(error.message);
   }
