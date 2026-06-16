@@ -115,6 +115,37 @@ class CosBucketResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DiscoveredCosBucketResponse(BaseModel):
+    """
+    COS bucket metadata discovered from the linked Tencent Cloud account.
+
+    Attributes:
+        name: Bucket name without AppID suffix.
+        app_id: Tencent Cloud AppID suffix.
+        region: COS region identifier.
+        bucket: Full bucket identifier in bucket-appid format.
+        endpoint_mode: Preferred endpoint mode used for import.
+        use_https: Whether HTTPS should be used for imported access.
+        user_expected_private_route: Whether import should prefer private routing.
+        resolved_ip: Resolved COS endpoint address when available.
+        private_route: Whether the resolved endpoint looks like an internal address.
+        already_added: Whether the bucket already exists in the local configuration.
+        existing_bucket_id: Existing local bucket primary key when already added.
+    """
+
+    name: str
+    app_id: str
+    region: str
+    bucket: str
+    endpoint_mode: str
+    use_https: bool
+    user_expected_private_route: bool
+    resolved_ip: str | None = None
+    private_route: bool | None = None
+    already_added: bool
+    existing_bucket_id: int | None = None
+
+
 class BucketConnectivityResponse(BaseModel):
     """
     Immediate bucket connectivity test result.

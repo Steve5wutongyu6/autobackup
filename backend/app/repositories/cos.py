@@ -128,6 +128,26 @@ class CosRepository:
 
         return self.session.get(CosBucket, bucket_id)
 
+    def get_bucket_by_identity(self, name: str, app_id: str, region: str) -> CosBucket | None:
+        """
+        Fetch a bucket by its COS identity fields.
+
+        Args:
+            name: Bucket name without AppID suffix.
+            app_id: Tencent Cloud AppID suffix.
+            region: COS region identifier.
+
+        Returns:
+            Matching bucket entity or None.
+        """
+
+        statement = select(CosBucket).where(
+            CosBucket.name == name,
+            CosBucket.app_id == app_id,
+            CosBucket.region == region,
+        )
+        return self.session.scalars(statement).first()
+
     def delete_bucket(self, bucket: CosBucket) -> None:
         """
         Delete a stored bucket definition.

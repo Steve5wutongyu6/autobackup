@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
 from app.schemas.common import ApiMessage
-from app.schemas.cos import BucketConnectivityResponse, CosBucketCreateRequest, CosBucketResponse
+from app.schemas.cos import BucketConnectivityResponse, CosBucketCreateRequest, CosBucketResponse, DiscoveredCosBucketResponse
 from app.schemas.cos import CosCredentialCreateRequest, CosCredentialResponse
 from app.services.cos_service import CosService
 
@@ -123,6 +123,30 @@ def list_buckets(_: int = Depends(require_admin), session: Session = Depends(get
     """
 
     return [CosBucketResponse.model_validate(item) for item in CosService(session).list_buckets()]
+
+
+@router.get("/credentials/{credential_id}/discover-buckets", response_model=list[DiscoveredCosBucketResponse])
+def discover_buckets(
+    credential_id: int,
+    _: int = Depends(require_admin),
+    session: Session = Depends(get_db),
+) -> list[DiscoveredCosBucketResponse]:
+    """
+    Load the current COS bucket list from a Tencent Cloud account credential.
+
+    Args:
+        credential_id: Credential primary key used to access COS.
+        _: Authenticated administrator ID.
+        session: Active SQLAlchemy session.
+
+    Returns:
+        Discovered bucket summary list sorted with private-route candidates first.
+    """
+
+    try:
+        return [DiscoveredCosBucketResponse(**item) for item in CosService(session).discover_buckets(credential_id)]
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.put("/buckets/{bucket_id}", response_model=CosBucketResponse)

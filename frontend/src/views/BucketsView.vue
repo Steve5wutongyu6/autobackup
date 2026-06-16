@@ -3,6 +3,7 @@
     <h1 class="view-title">存储桶管理</h1>
     <div class="table-toolbar">
       <el-button type="success" @click="saveBucket">新增存储桶</el-button>
+      <el-button :disabled="!bucketForm.credential_id" @click="discoverAccountBuckets">获取账户存储桶</el-button>
     </div>
     <el-alert
       v-if="credentials.length === 0"
@@ -50,6 +51,33 @@
         </el-form-item>
       </el-form>
     </el-card>
+    <el-card shadow="never" style="margin-top: 24px">
+      <template #header>账户中的存储桶</template>
+      <el-empty v-if="discoveredBuckets.length === 0" description="选择凭据后可拉取当前账户下的 COS 存储桶列表。" />
+      <el-table v-else :data="discoveredBuckets" border>
+        <el-table-column prop="bucket" label="Bucket" min-width="220" />
+        <el-table-column prop="region" label="地域" width="160" />
+        <el-table-column prop="resolved_ip" label="解析 IP" min-width="160" />
+        <el-table-column label="链路优先级" width="120">
+          <template #default="{ row }">{{ routePriorityLabel(row) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="120">
+          <template #default="{ row }">{{ row.already_added ? "已添加" : "未添加" }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="160">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              type="primary"
+              :disabled="row.already_added"
+              @click="importBucket(row)"
+            >
+              一键添加
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
     <el-table :data="buckets" style="margin-top: 24px" border>
       <el-table-column prop="name" label="Bucket" />
       <el-table-column prop="region" label="地域" />
@@ -69,13 +97,14 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from "vue";
+import { onMounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 
 import { request } from "../api/http";
 
 const credentials = ref([]);
 const buckets = ref([]);
+const discoveredBuckets = ref([]);
 const bucketForm = reactive(createBucketForm());
 
 /**
@@ -118,6 +147,26 @@ async function loadData() {
 }
 
 /**
+ * Load the current Tencent Cloud bucket list for the selected credential.
+ *
+ * Returns:
+ *   Promise that resolves after the discovery list is refreshed.
+ */
+async function discoverAccountBuckets() {
+  if (!bucketForm.credential_id) {
+    ElMessage.warning("请先选择一个 COS 凭据");
+    return;
+  }
+
+  try {
+    discoveredBuckets.value = await request(`/api/cos/credentials/${bucketForm.credential_id}/discover-buckets`);
+    ElMessage.success(`已获取 ${discoveredBuckets.value.length} 个存储桶`);
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+/**
  * Persist a new bucket definition.
  *
  * Returns:
@@ -135,6 +184,60 @@ async function saveBucket() {
   } catch (error) {
     ElMessage.error(error.message);
   }
+}
+
+/**
+ * Import a discovered bucket into the local configuration and validate connectivity.
+ *
+ * Args:
+ *   discoveredBucket: Bucket summary returned by the discovery API.
+ *
+ * Returns:
+ *   Promise that resolves after the bucket is created and checked.
+ */
+async function importBucket(discoveredBucket) {
+  try {
+    const savedBucket = await request("/api/cos/buckets", {
+      method: "POST",
+      body: JSON.stringify({
+        credential_id: bucketForm.credential_id,
+        name: discoveredBucket.name,
+        app_id: discoveredBucket.app_id,
+        region: discoveredBucket.region,
+        endpoint_mode: discoveredBucket.endpoint_mode,
+        custom_endpoint: "",
+        use_https: discoveredBucket.use_https,
+        user_expected_private_route: true
+      })
+    });
+    await request(`/api/cos/buckets/${savedBucket.id}/check`, {
+      method: "POST"
+    });
+    ElMessage.success(`已添加 ${discoveredBucket.bucket}`);
+    await loadData();
+    await discoverAccountBuckets();
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+/**
+ * Map discovery route information into a compact operator-facing label.
+ *
+ * Args:
+ *   discoveredBucket: Bucket summary returned by the discovery API.
+ *
+ * Returns:
+ *   Route priority label string.
+ */
+function routePriorityLabel(discoveredBucket) {
+  if (discoveredBucket.private_route === true) {
+    return "优先内网";
+  }
+  if (discoveredBucket.private_route === false) {
+    return "公网候选";
+  }
+  return "待确认";
 }
 
 /**
@@ -178,6 +281,13 @@ async function deleteBucket(bucketId) {
     ElMessage.error(error.message);
   }
 }
+
+watch(
+  () => bucketForm.credential_id,
+  () => {
+    discoveredBuckets.value = [];
+  }
+);
 
 onMounted(loadData);
 </script>
