@@ -1146,3 +1146,30 @@ class BackupService:
         """
 
         return self.repository.list_pending_run_requests()
+
+    def finalize_stale_cancel_requested_runs(self) -> int:
+        """
+        Mark cancel-requested running jobs as canceled when no worker is executing them.
+
+        Returns:
+            Number of run requests finalized.
+        """
+
+        finalized_count = 0
+        for run_request in self.repository.list_cancel_requested_running_run_requests():
+            run_request.status = JobStatus.CANCELED.value
+            run_request.current_step = "canceled"
+            run_request.step_message = "备份作业已安全终止"
+            run_request.step_unit = None
+            run_request.step_total = 0
+            run_request.step_completed = 0
+            run_request.progress_percent = 0
+            run_request.finished_at = datetime.now(UTC)
+            if not run_request.error_message:
+                run_request.error_message = "备份作业已被手动终止"
+            self.session.add(run_request)
+            finalized_count += 1
+        if finalized_count:
+            self.session.flush()
+            self._commit_progress()
+        return finalized_count

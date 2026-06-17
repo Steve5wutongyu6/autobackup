@@ -232,6 +232,24 @@ class BackupRepository:
         )
         return list(self.session.scalars(statement))
 
+    def list_cancel_requested_running_run_requests(self) -> list[BackupRunRequest]:
+        """
+        List running requests whose worker-side cancellation did not finish cleanly.
+
+        Returns:
+            Running run request entities with a pending cancel flag, ordered by creation time.
+        """
+
+        statement = (
+            select(BackupRunRequest)
+            .where(
+                BackupRunRequest.status == JobStatus.RUNNING.value,
+                BackupRunRequest.cancel_requested.is_(True),
+            )
+            .order_by(BackupRunRequest.created_at.asc())
+        )
+        return list(self.session.scalars(statement))
+
     def list_recent_run_requests(self, limit: int = 20) -> list[BackupRunRequest]:
         """
         List recent backup run requests with bucket progress details.

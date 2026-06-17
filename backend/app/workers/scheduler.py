@@ -44,6 +44,9 @@ def _run_pending_backup_requests() -> None:
 
     with session_scope() as session:
         service = BackupService(session)
+        finalized_count = service.finalize_stale_cancel_requested_runs()
+        if finalized_count:
+            logger.info("Finalized stale canceled backup run requests", extra={"count": finalized_count})
         for run_request in service.list_pending_run_requests():
             try:
                 service.execute_run_request(run_request.id)
