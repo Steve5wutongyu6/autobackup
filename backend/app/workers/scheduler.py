@@ -13,6 +13,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db.base import Base, engine, ensure_schema_compatibility, session_scope
 from app.services.auth_service import AuthService
 from app.services.backup_service import BackupService
+from app.services.backup_service import BackupRunCanceledError
 
 
 logger = get_logger(__name__)
@@ -46,6 +47,11 @@ def _run_pending_backup_requests() -> None:
         for run_request in service.list_pending_run_requests():
             try:
                 service.execute_run_request(run_request.id)
+            except BackupRunCanceledError:
+                logger.info(
+                    "Manual backup run request canceled safely",
+                    extra={"run_request_id": run_request.id, "task_id": run_request.task_id},
+                )
             except Exception:
                 logger.exception(
                     "Manual backup run request failed",

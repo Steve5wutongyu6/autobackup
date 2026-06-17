@@ -252,6 +252,7 @@ class BackupRunRequestResponse(BaseModel):
         step_total: Total work units in the current step.
         step_completed: Completed work units in the current step.
         progress_percent: Current step percentage from 0 to 100.
+        cancel_requested: Whether an operator has requested safe termination.
         artifact_id: Created logical artifact ID when available.
         error_message: Failure detail when present.
         started_at: Actual execution start time.
@@ -271,6 +272,7 @@ class BackupRunRequestResponse(BaseModel):
     step_total: int
     step_completed: int
     progress_percent: int
+    cancel_requested: bool
     artifact_id: int | None
     error_message: str | None
     started_at: datetime | None

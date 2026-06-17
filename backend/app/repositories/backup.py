@@ -251,6 +251,27 @@ class BackupRepository:
         )
         return list(self.session.scalars(statement))
 
+    def list_active_run_requests_for_task(self, task_id: int) -> list[BackupRunRequest]:
+        """
+        List queued or running backup requests for one task.
+
+        Args:
+            task_id: Backup task primary key.
+
+        Returns:
+            Active run request entities ordered by newest first.
+        """
+
+        statement = (
+            select(BackupRunRequest)
+            .where(
+                BackupRunRequest.task_id == task_id,
+                BackupRunRequest.status.in_((JobStatus.PENDING.value, JobStatus.RUNNING.value)),
+            )
+            .order_by(BackupRunRequest.created_at.desc())
+        )
+        return list(self.session.scalars(statement))
+
     def save_restore_job(self, restore_job: RestoreJob) -> RestoreJob:
         """
         Persist a restore job entity.

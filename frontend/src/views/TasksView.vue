@@ -146,6 +146,16 @@
           <el-button size="small" type="success" :disabled="isTaskBusy(row.id)" @click="runTask(row.id)">
             {{ isTaskBusy(row.id) ? "执行中" : "立即执行" }}
           </el-button>
+          <el-button
+            v-if="getLatestRun(row.id) && canCancelRun(getLatestRun(row.id))"
+            size="small"
+            type="danger"
+            plain
+            :disabled="isCancelPending(getLatestRun(row.id))"
+            @click="cancelRunRequest(getLatestRun(row.id))"
+          >
+            {{ isCancelPending(getLatestRun(row.id)) ? "终止中" : "终止" }}
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -171,6 +181,7 @@ const weekdayLabelMap = Object.fromEntries(weekdayOptions.map((item) => [item.va
 const statusTagTypeMap = {
   pending: "info",
   running: "warning",
+  canceled: "info",
   success: "success",
   failed: "danger"
 };
@@ -357,6 +368,27 @@ async function runTask(taskId) {
 }
 
 /**
+ * Request safe termination for one queued or running backup job.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   Promise that resolves after the backend records the cancel request.
+ */
+async function cancelRunRequest(runRequest) {
+  try {
+    await request(`/api/backup-run-requests/${runRequest.id}/cancel`, {
+      method: "POST"
+    });
+    ElMessage.success("已提交终止请求，系统将安全结束并清理当前作业");
+    await refreshRunRequests();
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+/**
  * Format one task schedule into a readable summary string for the table.
  *
  * Args:
@@ -411,6 +443,32 @@ function isTaskBusy(taskId) {
 }
 
 /**
+ * Check whether one run request can still be canceled from the UI.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   True when the run is still queued or running.
+ */
+function canCancelRun(runRequest) {
+  return ["pending", "running"].includes(runRequest.status);
+}
+
+/**
+ * Check whether one run request already has a cancel request in progress.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   True when the operator already asked the backend to terminate the job.
+ */
+function isCancelPending(runRequest) {
+  return Boolean(runRequest.cancel_requested);
+}
+
+/**
  * Convert one run request status into display text.
  *
  * Args:
@@ -423,9 +481,13 @@ function formatRunStatus(runRequest) {
   const statusTextMap = {
     pending: "排队中",
     running: "执行中",
+    canceled: "已终止",
     success: "成功",
     failed: "失败"
   };
+  if (runRequest.cancel_requested && runRequest.status === "running") {
+    return "终止中";
+  }
   return statusTextMap[runRequest.status] || runRequest.status;
 }
 
@@ -454,6 +516,8 @@ function formatRunSource(runRequest) {
 function formatStepText(runRequest) {
   const stepTextMap = {
     queued: "等待 worker 执行",
+    cancel_requested: "正在安全终止当前作业",
+    canceled: "备份作业已终止",
     scanning: "正在扫描源目录",
     compressing: "正在压缩文件",
     checksumming: "正在计算校验值",
@@ -474,6 +538,9 @@ function formatStepText(runRequest) {
  *   Detail string containing completed units and percent.
  */
 function formatProgressDetail(runRequest) {
+  if (runRequest.status === "canceled") {
+    return runRequest.finished_at ? `终止完成时间: ${runRequest.finished_at}` : "备份作业已终止";
+  }
   if (!runRequest.step_total || !runRequest.step_unit) {
     return runRequest.finished_at ? `完成时间: ${runRequest.finished_at}` : "等待更多进度数据";
   }
@@ -525,6 +592,9 @@ function formatBucketProgressDetail(bucketProgress) {
  *   Short summary string suitable for a table cell.
  */
 function buildRunSummary(runRequest) {
+  if (runRequest.cancel_requested && ["pending", "running"].includes(runRequest.status)) {
+    return "正在接收终止请求并清理现场";
+  }
   return `${formatStepText(runRequest)} / ${runRequest.progress_percent}%`;
 }
 

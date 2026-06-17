@@ -247,6 +247,31 @@ def list_run_requests(_: int = Depends(require_admin), session: Session = Depend
     return [_map_run_request(item) for item in BackupService(session).list_run_requests()]
 
 
+@router.post("/api/backup-run-requests/{run_request_id}/cancel", response_model=BackupRunRequestResponse)
+def cancel_run_request(
+    run_request_id: int,
+    _: int = Depends(require_admin),
+    session: Session = Depends(get_db),
+) -> BackupRunRequestResponse:
+    """
+    Request safe termination for one queued or running backup job.
+
+    Args:
+        run_request_id: Backup run request primary key.
+        _: Authenticated administrator ID.
+        session: Active SQLAlchemy session.
+
+    Returns:
+        Updated backup run request response.
+    """
+
+    try:
+        run_request = BackupService(session).cancel_run_request(run_request_id)
+        return _map_run_request(run_request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @router.delete("/api/artifacts/{artifact_id}", response_model=ApiMessage)
 def delete_artifact(
     artifact_id: int,

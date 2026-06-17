@@ -227,6 +227,7 @@ class BackupRunRequest(Base):
     step_total: Mapped[int] = mapped_column(BIGINT, default=0)
     step_completed: Mapped[int] = mapped_column(BIGINT, default=0)
     progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     artifact_id: Mapped[int | None] = mapped_column(ForeignKey("backup_artifact.id"), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -27,6 +27,10 @@ from app.services.cos_service import CosService
 from app.services.log_service import LogService
 
 
+class BackupRunCanceledError(Exception):
+    """Raised when a backup run is canceled safely by an operator."""
+
+
 class BackupService:
     """Manage backup task definitions, archive generation, uploads, and restore jobs."""
 
@@ -175,6 +179,40 @@ class BackupService:
 
         self.session.commit()
 
+    def _refresh_run_request(self, run_request: BackupRunRequest) -> BackupRunRequest:
+        """
+        Reload one run request from the database so worker code can observe cancel flags.
+
+        Args:
+            run_request: In-memory run request entity from the current session.
+
+        Returns:
+            The same run request entity refreshed with the latest database state.
+        """
+
+        self.session.refresh(run_request)
+        return run_request
+
+    def _raise_if_run_canceled(self, run_request: BackupRunRequest | None) -> None:
+        """
+        Stop execution when the operator has requested safe cancellation.
+
+        Args:
+            run_request: Active run request entity or None outside worker-tracked execution.
+
+        Returns:
+            None. Execution continues when no cancel request is present.
+
+        Raises:
+            BackupRunCanceledError: Raised when the current run request was canceled.
+        """
+
+        if not run_request:
+            return
+        self._refresh_run_request(run_request)
+        if run_request.cancel_requested:
+            raise BackupRunCanceledError("备份作业已被手动终止")
+
     def _update_run_request_step(
         self,
         run_request: BackupRunRequest,
@@ -240,6 +278,36 @@ class BackupService:
                 total_bytes += file_size
         return file_entries, total_bytes
 
+    def _collect_source_entries_for_run(
+        self,
+        source_path: Path,
+        run_request: BackupRunRequest | None,
+    ) -> tuple[list[tuple[Path, Path, int]], int]:
+        """
+        Walk the source directory with cooperative cancel checks for one tracked backup run.
+
+        Args:
+            source_path: Backup source directory path.
+            run_request: Active run request entity or None.
+
+        Returns:
+            Tuple of file entries and total source byte count.
+        """
+
+        self._raise_if_run_canceled(run_request)
+        file_entries: list[tuple[Path, Path, int]] = []
+        total_bytes = 0
+        for root, _, files in os.walk(source_path):
+            self._raise_if_run_canceled(run_request)
+            for file_name in files:
+                self._raise_if_run_canceled(run_request)
+                absolute_path = Path(root) / file_name
+                file_size = absolute_path.stat().st_size
+                relative_path = absolute_path.relative_to(source_path.parent)
+                file_entries.append((absolute_path, relative_path, file_size))
+                total_bytes += file_size
+        return file_entries, total_bytes
+
     def _calculate_file_sha256(
         self,
         file_path: Path,
@@ -275,6 +343,7 @@ class BackupService:
     def _build_archive(
         self,
         task: BackupTask,
+        run_request: BackupRunRequest | None = None,
         progress_callback: Callable[[str, int, int, int, int], None] | None = None,
     ) -> tuple[Path, str, str]:
         """
@@ -293,7 +362,7 @@ class BackupService:
         zip_password = decrypt_text(task.zip_password_ciphertext, task.zip_password_nonce, f"zip_password:{task.name}")
         archive_name = f"{task.name}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}.zip"
         archive_path = settings.temp_dir / archive_name
-        file_entries, total_source_bytes = self._collect_source_entries(source_path)
+        file_entries, total_source_bytes = self._collect_source_entries_for_run(source_path, run_request)
         total_files = len(file_entries)
         manifest = {
             "task_id": task.id,
@@ -310,6 +379,7 @@ class BackupService:
         with pyzipper.AESZipFile(archive_path, "w", compression=ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as archive:
             archive.setpassword(zip_password.encode("utf-8"))
             for absolute_path, relative_path, file_size in file_entries:
+                self._raise_if_run_canceled(run_request)
                 archive.write(absolute_path, arcname=str(relative_path))
                 processed_source_bytes += file_size
                 processed_files += 1
@@ -323,6 +393,7 @@ class BackupService:
                     )
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
+        self._raise_if_run_canceled(run_request)
         if progress_callback:
             progress_callback("checksumming", 0, archive_path.stat().st_size, total_files, total_files)
         sha256 = self._calculate_file_sha256(
@@ -379,6 +450,7 @@ class BackupService:
 
             if not run_request:
                 return
+            self._raise_if_run_canceled(run_request)
             if step == "compressing":
                 message = f"正在压缩文件 {processed_files}/{total_files}"
             else:
@@ -397,170 +469,222 @@ class BackupService:
             if should_commit:
                 compression_state["last_commit_at"] = monotonic()
 
-        archive_path, archive_name, sha256 = self._build_archive(task, handle_archive_progress if run_request else None)
-        size_bytes = archive_path.stat().st_size
-        artifact = self.repository.save_artifact(
-            BackupArtifact(
-                task_id=task.id,
-                artifact_key=generate_random_id(),
-                source_path=task.source_path,
-                archive_name=archive_name,
-                size_bytes=size_bytes,
-                sha256=sha256,
-                zip_encrypted=True,
-                status=JobStatus.RUNNING.value,
-            )
-        )
-        target_buckets = [self.cos_repository.get_bucket(task_bucket.bucket_id) for task_bucket in task.buckets]
-        available_buckets = [bucket for bucket in target_buckets if bucket]
-        expected_upload_bytes_total = size_bytes * len(available_buckets)
-
-        if run_request:
-            self._update_run_request_step(
-                run_request,
-                "uploading",
-                f"正在准备上传到 {len(available_buckets)} 个存储桶",
-                unit="bytes",
-                total=expected_upload_bytes_total,
-                completed=0,
-                status=JobStatus.RUNNING.value,
-            )
-
+        archive_path: Path | None = None
+        artifact: BackupArtifact | None = None
         success_count = 0
-        bucket_progress_rows: list[BackupRunBucketProgress] = []
-        for bucket in available_buckets:
-            object_key = f"autobackup/{task.name}/{archive_name}"
-            bucket_progress = None
-            bucket_commit_state = {"last_commit_at": 0.0}
+        created_replicas: list[tuple[object, ArtifactReplica]] = []
+        try:
+            archive_path, archive_name, sha256 = self._build_archive(
+                task,
+                run_request=run_request,
+                progress_callback=handle_archive_progress if run_request else None,
+            )
+            self._raise_if_run_canceled(run_request)
+            size_bytes = archive_path.stat().st_size
+            artifact = self.repository.save_artifact(
+                BackupArtifact(
+                    task_id=task.id,
+                    artifact_key=generate_random_id(),
+                    source_path=task.source_path,
+                    archive_name=archive_name,
+                    size_bytes=size_bytes,
+                    sha256=sha256,
+                    zip_encrypted=True,
+                    status=JobStatus.RUNNING.value,
+                )
+            )
+            target_buckets = [self.cos_repository.get_bucket(task_bucket.bucket_id) for task_bucket in task.buckets]
+            available_buckets = [bucket for bucket in target_buckets if bucket]
+            expected_upload_bytes_total = size_bytes * len(available_buckets)
+
             if run_request:
-                bucket_progress = self.repository.save_bucket_progress(
-                    BackupRunBucketProgress(
-                        run_request_id=run_request.id,
+                self._update_run_request_step(
+                    run_request,
+                    "uploading",
+                    f"正在准备上传到 {len(available_buckets)} 个存储桶",
+                    unit="bytes",
+                    total=expected_upload_bytes_total,
+                    completed=0,
+                    status=JobStatus.RUNNING.value,
+                )
+
+            bucket_progress_rows: list[BackupRunBucketProgress] = []
+            for bucket in available_buckets:
+                self._raise_if_run_canceled(run_request)
+                object_key = f"autobackup/{task.name}/{archive_name}"
+                bucket_progress = None
+                bucket_commit_state = {"last_commit_at": 0.0}
+                if run_request:
+                    bucket_progress = self.repository.save_bucket_progress(
+                        BackupRunBucketProgress(
+                            run_request_id=run_request.id,
+                            bucket_id=bucket.id,
+                            bucket_name=bucket.name,
+                            bucket_region=bucket.region,
+                            object_key=object_key,
+                            status=JobStatus.PENDING.value,
+                            total_bytes=size_bytes,
+                            uploaded_bytes=0,
+                            progress_percent=0,
+                        )
+                    )
+                    bucket_progress_rows.append(bucket_progress)
+                    self._commit_progress()
+
+                def handle_upload_progress(uploaded_bytes: int, total_bytes: int) -> None:
+                    """
+                    Persist one bucket upload progress callback from the COS SDK.
+
+                    Args:
+                        uploaded_bytes: Uploaded bytes already sent.
+                        total_bytes: Total bytes expected for this bucket upload.
+
+                    Returns:
+                        None. Progress rows are updated in place.
+                    """
+
+                    if not run_request or not bucket_progress:
+                        return
+                    self._raise_if_run_canceled(run_request)
+                    safe_total = max(total_bytes, 0)
+                    safe_uploaded = min(max(uploaded_bytes, 0), safe_total) if safe_total else max(uploaded_bytes, 0)
+                    bucket_progress.status = JobStatus.RUNNING.value
+                    bucket_progress.total_bytes = safe_total
+                    bucket_progress.uploaded_bytes = safe_uploaded
+                    bucket_progress.progress_percent = int((safe_uploaded / safe_total) * 100) if safe_total > 0 else 0
+                    self.session.add(bucket_progress)
+                    total_uploaded = sum(item.uploaded_bytes for item in bucket_progress_rows)
+                    should_commit = (monotonic() - bucket_commit_state["last_commit_at"]) >= 0.5 or safe_uploaded >= safe_total
+                    self._update_run_request_step(
+                        run_request,
+                        "uploading",
+                        f"正在上传到存储桶 {bucket.name} ({bucket.region})",
+                        unit="bytes",
+                        total=expected_upload_bytes_total,
+                        completed=total_uploaded,
+                        status=JobStatus.RUNNING.value,
+                        commit=False,
+                    )
+                    self.session.flush()
+                    if should_commit:
+                        self._commit_progress()
+                        bucket_commit_state["last_commit_at"] = monotonic()
+
+                replica = self.repository.save_replica(
+                    ArtifactReplica(
+                        artifact_id=artifact.id,
                         bucket_id=bucket.id,
-                        bucket_name=bucket.name,
-                        bucket_region=bucket.region,
                         object_key=object_key,
-                        status=JobStatus.PENDING.value,
-                        total_bytes=size_bytes,
-                        uploaded_bytes=0,
-                        progress_percent=0,
+                        upload_status=ReplicaStatus.PENDING.value,
                     )
                 )
-                bucket_progress_rows.append(bucket_progress)
-                self._commit_progress()
-
-            def handle_upload_progress(uploaded_bytes: int, total_bytes: int) -> None:
-                """
-                Persist one bucket upload progress callback from the COS SDK.
-
-                Args:
-                    uploaded_bytes: Uploaded bytes already sent.
-                    total_bytes: Total bytes expected for this bucket upload.
-
-                Returns:
-                    None. Progress rows are updated in place.
-                """
-
-                if not run_request or not bucket_progress:
-                    return
-                safe_total = max(total_bytes, 0)
-                safe_uploaded = min(max(uploaded_bytes, 0), safe_total) if safe_total else max(uploaded_bytes, 0)
-                bucket_progress.status = JobStatus.RUNNING.value
-                bucket_progress.total_bytes = safe_total
-                bucket_progress.uploaded_bytes = safe_uploaded
-                bucket_progress.progress_percent = int((safe_uploaded / safe_total) * 100) if safe_total > 0 else 0
-                self.session.add(bucket_progress)
-                total_uploaded = sum(item.uploaded_bytes for item in bucket_progress_rows)
-                should_commit = (monotonic() - bucket_commit_state["last_commit_at"]) >= 0.5 or safe_uploaded >= safe_total
-                self._update_run_request_step(
-                    run_request,
-                    "uploading",
-                    f"正在上传到存储桶 {bucket.name} ({bucket.region})",
-                    unit="bytes",
-                    total=expected_upload_bytes_total,
-                    completed=total_uploaded,
-                    status=JobStatus.RUNNING.value,
-                    commit=False,
-                )
+                created_replicas.append((bucket, replica))
+                try:
+                    upload_result = self.cos_service.upload_file(
+                        bucket,
+                        object_key,
+                        str(archive_path),
+                        progress_callback=handle_upload_progress if run_request else None,
+                    )
+                    replica.upload_status = ReplicaStatus.AVAILABLE.value
+                    replica.etag = str(upload_result.get("ETag", ""))
+                    replica.size_bytes = size_bytes
+                    if bucket_progress:
+                        bucket_progress.status = JobStatus.SUCCESS.value
+                        bucket_progress.uploaded_bytes = size_bytes
+                        bucket_progress.total_bytes = size_bytes
+                        bucket_progress.progress_percent = 100
+                    success_count += 1
+                except BackupRunCanceledError:
+                    replica.upload_status = ReplicaStatus.DELETED.value
+                    replica.error_message = "备份作业已被手动终止"
+                    if bucket_progress:
+                        bucket_progress.status = JobStatus.CANCELED.value
+                        bucket_progress.error_message = "备份作业已被手动终止"
+                    try:
+                        self.cos_service.delete_object(bucket, object_key)
+                    except Exception:
+                        self.log_service.app_log(
+                            "WARNING",
+                            __name__,
+                            "Canceled backup cleanup could not delete remote object.",
+                            detail=f"bucket_id={bucket.id}, object_key={object_key}",
+                        )
+                    raise
+                except Exception as error:
+                    replica.upload_status = ReplicaStatus.FAILED.value
+                    replica.error_message = str(error)
+                    if bucket_progress:
+                        bucket_progress.status = JobStatus.FAILED.value
+                        bucket_progress.error_message = str(error)
+                self.session.add(replica)
+                if bucket_progress:
+                    self.session.add(bucket_progress)
                 self.session.flush()
-                if should_commit:
-                    self._commit_progress()
-                    bucket_commit_state["last_commit_at"] = monotonic()
+                if run_request:
+                    self._update_run_request_step(
+                        run_request,
+                        "uploading",
+                        f"已完成 {success_count}/{len(available_buckets)} 个存储桶上传",
+                        unit="bytes",
+                        total=expected_upload_bytes_total,
+                        completed=sum(item.uploaded_bytes for item in bucket_progress_rows),
+                        status=JobStatus.RUNNING.value,
+                    )
 
-            replica = self.repository.save_replica(
-                ArtifactReplica(
-                    artifact_id=artifact.id,
-                    bucket_id=bucket.id,
-                    object_key=object_key,
-                    upload_status=ReplicaStatus.PENDING.value,
-                )
-            )
-            try:
-                upload_result = self.cos_service.upload_file(
-                    bucket,
-                    object_key,
-                    str(archive_path),
-                    progress_callback=handle_upload_progress if run_request else None,
-                )
-                replica.upload_status = ReplicaStatus.AVAILABLE.value
-                replica.etag = str(upload_result.get("ETag", ""))
-                replica.size_bytes = size_bytes
-                if bucket_progress:
-                    bucket_progress.status = JobStatus.SUCCESS.value
-                    bucket_progress.uploaded_bytes = size_bytes
-                    bucket_progress.total_bytes = size_bytes
-                    bucket_progress.progress_percent = 100
-                success_count += 1
-            except Exception as error:
-                replica.upload_status = ReplicaStatus.FAILED.value
-                replica.error_message = str(error)
-                if bucket_progress:
-                    bucket_progress.status = JobStatus.FAILED.value
-                    bucket_progress.error_message = str(error)
-            self.session.add(replica)
-            if bucket_progress:
-                self.session.add(bucket_progress)
+            artifact.status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
+            self.session.add(artifact)
             self.session.flush()
             if run_request:
+                final_status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
+                final_step = "completed" if success_count > 0 else "failed"
+                final_message = (
+                    f"备份已完成，成功上传到 {success_count} 个存储桶"
+                    if success_count > 0
+                    else "备份执行失败，没有存储桶上传成功"
+                )
                 self._update_run_request_step(
                     run_request,
-                    "uploading",
-                    f"已完成 {success_count}/{len(available_buckets)} 个存储桶上传",
-                    unit="bytes",
-                    total=expected_upload_bytes_total,
-                    completed=sum(item.uploaded_bytes for item in bucket_progress_rows),
-                    status=JobStatus.RUNNING.value,
+                    final_step,
+                    final_message,
+                    unit=None,
+                    total=1,
+                    completed=1 if success_count > 0 else 0,
+                    status=final_status,
                 )
-
-        artifact.status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
-        self.session.add(artifact)
-        self.session.flush()
-        archive_path.unlink(missing_ok=True)
-        if run_request:
-            final_status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
-            final_step = "completed" if success_count > 0 else "failed"
-            final_message = (
-                f"备份已完成，成功上传到 {success_count} 个存储桶"
-                if success_count > 0
-                else "备份执行失败，没有存储桶上传成功"
-            )
-            self._update_run_request_step(
-                run_request,
-                final_step,
-                final_message,
-                unit=None,
-                total=1,
-                completed=1 if success_count > 0 else 0,
-                status=final_status,
-            )
+        except BackupRunCanceledError:
+            for bucket, replica in created_replicas:
+                if replica.object_key and replica.upload_status in {ReplicaStatus.AVAILABLE.value, ReplicaStatus.PENDING.value}:
+                    try:
+                        self.cos_service.delete_object(bucket, replica.object_key)
+                    except Exception:
+                        self.log_service.app_log(
+                            "WARNING",
+                            __name__,
+                            "Canceled backup cleanup could not delete remote object.",
+                            detail=f"bucket_id={bucket.id}, object_key={replica.object_key}",
+                        )
+                replica.upload_status = ReplicaStatus.DELETED.value
+                replica.error_message = "备份作业已被手动终止"
+                self.session.add(replica)
+            if artifact:
+                artifact.status = JobStatus.CANCELED.value
+                self.session.add(artifact)
+            self.session.flush()
+            raise
+        finally:
+            if archive_path:
+                archive_path.unlink(missing_ok=True)
         self.log_service.audit(
             action="backup.task_run",
             actor="worker",
             target_type="backup_task",
             target_id=str(task.id),
             outcome="success" if success_count > 0 else "failure",
-            detail=f"Backup archive {archive_name} uploaded to {success_count} buckets.",
+            detail=f"Backup uploaded to {success_count} buckets.",
         )
+        if not artifact:
+            raise ValueError("Backup artifact was not created")
         return self.repository.get_artifact(artifact.id) or artifact
 
     def create_run_request(self, task_id: int, trigger_source: str, actor: str) -> BackupRunRequest:
@@ -596,6 +720,7 @@ class BackupService:
                 step_total=0,
                 step_completed=0,
                 progress_percent=0,
+                cancel_requested=False,
             )
         )
         self.log_service.audit(
@@ -653,6 +778,17 @@ class BackupService:
         run_request = self.repository.get_run_request(run_request_id)
         if not run_request:
             raise ValueError("Backup run request not found")
+        if run_request.status == JobStatus.CANCELED.value or (
+            run_request.cancel_requested and run_request.status == JobStatus.PENDING.value
+        ):
+            run_request.status = JobStatus.CANCELED.value
+            run_request.current_step = "canceled"
+            run_request.step_message = "备份作业已取消，未进入执行"
+            run_request.finished_at = datetime.now(UTC)
+            self.session.add(run_request)
+            self.session.flush()
+            self._commit_progress()
+            raise BackupRunCanceledError("Backup run request canceled before execution")
 
         run_request.started_at = datetime.now(UTC)
         run_request.finished_at = None
@@ -674,6 +810,27 @@ class BackupService:
             self.session.flush()
             self._commit_progress()
             return artifact
+        except BackupRunCanceledError as error:
+            run_request.finished_at = datetime.now(UTC)
+            run_request.error_message = str(error)
+            self._update_run_request_step(
+                run_request,
+                "canceled",
+                "备份作业已安全终止并完成清理",
+                unit=None,
+                total=0,
+                completed=0,
+                status=JobStatus.CANCELED.value,
+            )
+            self.log_service.audit(
+                action="backup.task_cancel",
+                actor="admin",
+                target_type="backup_run_request",
+                target_id=str(run_request.id),
+                outcome="success",
+                detail="Backup run canceled safely.",
+            )
+            raise
         except Exception as error:
             run_request.finished_at = datetime.now(UTC)
             run_request.error_message = str(error)
@@ -695,6 +852,47 @@ class BackupService:
                 detail=f"Queued manual backup failed: {error}",
             )
             raise
+
+    def cancel_run_request(self, run_request_id: int) -> BackupRunRequest:
+        """
+        Cancel one queued or running backup request and mark it for worker-side cleanup.
+
+        Args:
+            run_request_id: Backup run request primary key.
+
+        Returns:
+            Updated backup run request entity.
+
+        Raises:
+            ValueError: Raised when the run request does not exist or has already finished.
+        """
+
+        run_request = self.repository.get_run_request(run_request_id)
+        if not run_request:
+            raise ValueError("Backup run request not found")
+        if run_request.status in {JobStatus.SUCCESS.value, JobStatus.FAILED.value, JobStatus.CANCELED.value}:
+            raise ValueError("Backup run request has already finished")
+
+        run_request.cancel_requested = True
+        if run_request.status == JobStatus.PENDING.value:
+            run_request.status = JobStatus.CANCELED.value
+            run_request.current_step = "canceled"
+            run_request.step_message = "备份作业已取消，未进入执行"
+            run_request.finished_at = datetime.now(UTC)
+        else:
+            run_request.current_step = "cancel_requested"
+            run_request.step_message = "正在安全终止并清理当前备份作业"
+        self.session.add(run_request)
+        self.session.flush()
+        self.log_service.audit(
+            action="backup.task_cancel_request",
+            actor="admin",
+            target_type="backup_run_request",
+            target_id=str(run_request.id),
+            outcome="success",
+            detail="Backup run cancellation requested.",
+        )
+        return run_request
 
     def list_run_requests(self, limit: int = 100) -> list[BackupRunRequest]:
         """
