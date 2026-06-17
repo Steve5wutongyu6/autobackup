@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import decrypt_text, encrypt_text, ensure_allowed_path, generate_random_id
 from app.models.entities import ArtifactReplica, BackupArtifact, BackupRunBucketProgress, BackupRunRequest, BackupTask
+from app.models.entities import CosBucket
 from app.models.entities import JobStatus, ReplicaStatus, RestoreJob
 from app.models.entities import ScheduleType
 from app.repositories.backup import BackupRepository
@@ -48,6 +49,31 @@ class BackupService:
         self.cos_service = CosService(session)
         self.log_service = LogService(session)
         settings.temp_dir.mkdir(parents=True, exist_ok=True)
+
+    def _sort_buckets_for_upload(self, buckets: list[CosBucket]) -> list[CosBucket]:
+        """
+        Order target buckets so verified private-route COS buckets upload first.
+
+        Args:
+            buckets: Target bucket entities in task-defined order.
+
+        Returns:
+            Buckets sorted by route preference while preserving order within each group.
+        """
+
+        def priority(indexed_bucket: tuple[int, CosBucket]) -> tuple[int, int]:
+            index, bucket = indexed_bucket
+            status = str(getattr(bucket, "status", ""))
+            private_route_verified = bool(getattr(bucket, "last_nslookup_private", False))
+            private_route_available = status in {"private_route", "available_private"}
+            user_expected_private = bool(getattr(bucket, "user_expected_private_route", False))
+            if private_route_verified or private_route_available:
+                return (0, index)
+            if user_expected_private:
+                return (1, index)
+            return (2, index)
+
+        return [bucket for _, bucket in sorted(enumerate(buckets), key=priority)]
 
     def create_or_update_task(self, task_id: int | None, payload: dict[str, object]) -> BackupTask:
         """
@@ -519,7 +545,7 @@ class BackupService:
                 )
             )
             target_buckets = [self.cos_repository.get_bucket(task_bucket.bucket_id) for task_bucket in task.buckets]
-            available_buckets = [bucket for bucket in target_buckets if bucket]
+            available_buckets = self._sort_buckets_for_upload([bucket for bucket in target_buckets if bucket])
             expected_upload_bytes_total = size_bytes * len(available_buckets)
 
             if run_request:
