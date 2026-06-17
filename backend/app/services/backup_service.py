@@ -272,7 +272,10 @@ class BackupService:
         for root, _, files in os.walk(source_path):
             for file_name in files:
                 absolute_path = Path(root) / file_name
-                file_size = absolute_path.stat().st_size
+                try:
+                    file_size = absolute_path.stat().st_size
+                except FileNotFoundError:
+                    continue
                 relative_path = absolute_path.relative_to(source_path.parent)
                 file_entries.append((absolute_path, relative_path, file_size))
                 total_bytes += file_size
@@ -302,7 +305,10 @@ class BackupService:
             for file_name in files:
                 self._raise_if_run_canceled(run_request)
                 absolute_path = Path(root) / file_name
-                file_size = absolute_path.stat().st_size
+                try:
+                    file_size = absolute_path.stat().st_size
+                except FileNotFoundError:
+                    continue
                 relative_path = absolute_path.relative_to(source_path.parent)
                 file_entries.append((absolute_path, relative_path, file_size))
                 total_bytes += file_size
@@ -369,6 +375,7 @@ class BackupService:
             "task_name": task.name,
             "source_path": str(source_path),
             "created_at": datetime.now(UTC).isoformat(),
+            "skipped_files": [],
         }
 
         if progress_callback:
@@ -376,32 +383,50 @@ class BackupService:
 
         processed_source_bytes = 0
         processed_files = 0
-        with pyzipper.AESZipFile(archive_path, "w", compression=ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as archive:
-            archive.setpassword(zip_password.encode("utf-8"))
-            for absolute_path, relative_path, file_size in file_entries:
-                self._raise_if_run_canceled(run_request)
-                archive.write(absolute_path, arcname=str(relative_path))
-                processed_source_bytes += file_size
-                processed_files += 1
-                if progress_callback:
-                    progress_callback(
-                        "compressing",
-                        processed_source_bytes,
-                        total_source_bytes,
-                        processed_files,
-                        total_files,
-                    )
-            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        try:
+            with pyzipper.AESZipFile(archive_path, "w", compression=ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as archive:
+                archive.setpassword(zip_password.encode("utf-8"))
+                for absolute_path, relative_path, file_size in file_entries:
+                    self._raise_if_run_canceled(run_request)
+                    try:
+                        archive.write(absolute_path, arcname=str(relative_path))
+                    except FileNotFoundError:
+                        manifest["skipped_files"].append(str(relative_path))
+                        total_source_bytes = max(processed_source_bytes, total_source_bytes - file_size)
+                        total_files = max(processed_files, total_files - 1)
+                        if progress_callback:
+                            progress_callback(
+                                "compressing",
+                                processed_source_bytes,
+                                total_source_bytes,
+                                processed_files,
+                                total_files,
+                            )
+                        continue
+                    processed_source_bytes += file_size
+                    processed_files += 1
+                    if progress_callback:
+                        progress_callback(
+                            "compressing",
+                            processed_source_bytes,
+                            total_source_bytes,
+                            processed_files,
+                            total_files,
+                        )
+                archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
-        self._raise_if_run_canceled(run_request)
-        if progress_callback:
-            progress_callback("checksumming", 0, archive_path.stat().st_size, total_files, total_files)
-        sha256 = self._calculate_file_sha256(
-            archive_path,
-            lambda completed, total: progress_callback("checksumming", completed, total, total_files, total_files)
-            if progress_callback
-            else None,
-        )
+            self._raise_if_run_canceled(run_request)
+            if progress_callback:
+                progress_callback("checksumming", 0, archive_path.stat().st_size, total_files, total_files)
+            sha256 = self._calculate_file_sha256(
+                archive_path,
+                lambda completed, total: progress_callback("checksumming", completed, total, total_files, total_files)
+                if progress_callback
+                else None,
+            )
+        except Exception:
+            archive_path.unlink(missing_ok=True)
+            raise
         return archive_path, archive_name, sha256
 
     def run_task(self, task_id: int, run_request: BackupRunRequest | None = None) -> BackupArtifact:
