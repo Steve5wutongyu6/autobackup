@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import os
 import socket
 import subprocess
 
@@ -474,14 +475,128 @@ class CosService:
         """
 
         client = self._build_client(bucket)
-        return client.upload_file(
-            Bucket=f"{bucket.name}-{bucket.app_id}",
-            Key=object_key,
-            LocalFilePath=file_path,
-            MAXThread=1,
-            EnableMD5=False,
-            progress_callback=progress_callback,
-        )
+        bucket_name = f"{bucket.name}-{bucket.app_id}"
+        file_size = os.path.getsize(file_path)
+        if progress_callback:
+            progress_callback(0, file_size)
+
+        if file_size <= 8 * 1024 * 1024:
+            with open(file_path, "rb") as file_handle:
+                response = client.put_object(
+                    Bucket=bucket_name,
+                    Key=object_key,
+                    Body=file_handle,
+                    EnableMD5=False,
+                )
+            if progress_callback:
+                progress_callback(file_size, file_size)
+            return response
+
+        upload_id = ""
+        uploaded_bytes = 0
+        parts: list[dict[str, object]] = []
+        part_size = 8 * 1024 * 1024
+        try:
+            upload_response = client.create_multipart_upload(Bucket=bucket_name, Key=object_key)
+            upload_id = str(upload_response["UploadId"])
+            with open(file_path, "rb") as file_handle:
+                part_number = 1
+                while True:
+                    if progress_callback:
+                        progress_callback(uploaded_bytes, file_size)
+                    chunk = file_handle.read(part_size)
+                    if not chunk:
+                        break
+                    part_response = client.upload_part(
+                        Bucket=bucket_name,
+                        Key=object_key,
+                        Body=chunk,
+                        PartNumber=part_number,
+                        UploadId=upload_id,
+                        EnableMD5=False,
+                    )
+                    parts.append({"PartNumber": part_number, "ETag": part_response.get("ETag", "")})
+                    uploaded_bytes += len(chunk)
+                    if progress_callback:
+                        progress_callback(uploaded_bytes, file_size)
+                    part_number += 1
+            return client.complete_multipart_upload(
+                Bucket=bucket_name,
+                Key=object_key,
+                UploadId=upload_id,
+                MultipartUpload={"Part": parts},
+            )
+        except Exception:
+            if upload_id:
+                try:
+                    client.abort_multipart_upload(Bucket=bucket_name, Key=object_key, UploadId=upload_id)
+                except Exception:
+                    self.log_service.app_log(
+                        "WARNING",
+                        __name__,
+                        "Could not abort canceled multipart upload.",
+                        detail=f"bucket_id={bucket.id}, object_key={object_key}, upload_id={upload_id}",
+                    )
+            raise
+
+    def cleanup_object_uploads(self, bucket: CosBucket, object_key: str) -> None:
+        """
+        Delete a completed object and abort unfinished multipart uploads for one object key.
+
+        Args:
+            bucket: Target bucket entity.
+            object_key: COS object key to clean up.
+
+        Returns:
+            None. Cleanup is best-effort and logs individual failures.
+        """
+
+        try:
+            self.delete_object(bucket, object_key)
+        except Exception:
+            self.log_service.app_log(
+                "WARNING",
+                __name__,
+                "Canceled backup cleanup could not delete remote object.",
+                detail=f"bucket_id={bucket.id}, object_key={object_key}",
+            )
+
+        client = self._build_client(bucket)
+        bucket_name = f"{bucket.name}-{bucket.app_id}"
+        key_marker = ""
+        upload_id_marker = ""
+        while True:
+            response = client.list_multipart_uploads(
+                Bucket=bucket_name,
+                Prefix=object_key,
+                KeyMarker=key_marker,
+                UploadIdMarker=upload_id_marker,
+                MaxUploads=1000,
+            )
+            uploads = response.get("Upload", [])
+            if isinstance(uploads, dict):
+                uploads = [uploads]
+            for upload in uploads:
+                if str(upload.get("Key", "")) != object_key:
+                    continue
+                upload_id = str(upload.get("UploadId", ""))
+                if not upload_id:
+                    continue
+                try:
+                    client.abort_multipart_upload(Bucket=bucket_name, Key=object_key, UploadId=upload_id)
+                except Exception:
+                    self.log_service.app_log(
+                        "WARNING",
+                        __name__,
+                        "Canceled backup cleanup could not abort multipart upload.",
+                        detail=f"bucket_id={bucket.id}, object_key={object_key}, upload_id={upload_id}",
+                    )
+            if str(response.get("IsTruncated", "")).lower() not in {"true", "1"}:
+                break
+            key_marker = str(response.get("NextKeyMarker", ""))
+            upload_id_marker = str(response.get("NextUploadIdMarker", ""))
+            if not key_marker and not upload_id_marker:
+                break
 
     def delete_object(self, bucket: CosBucket, object_key: str) -> None:
         """

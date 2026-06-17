@@ -626,15 +626,7 @@ class BackupService:
                     if bucket_progress:
                         bucket_progress.status = JobStatus.CANCELED.value
                         bucket_progress.error_message = "备份作业已被手动终止"
-                    try:
-                        self.cos_service.delete_object(bucket, object_key)
-                    except Exception:
-                        self.log_service.app_log(
-                            "WARNING",
-                            __name__,
-                            "Canceled backup cleanup could not delete remote object.",
-                            detail=f"bucket_id={bucket.id}, object_key={object_key}",
-                        )
+                    self.cos_service.cleanup_object_uploads(bucket, object_key)
                     raise
                 except Exception as error:
                     replica.upload_status = ReplicaStatus.FAILED.value
@@ -681,12 +673,12 @@ class BackupService:
             for bucket, replica in created_replicas:
                 if replica.object_key and replica.upload_status in {ReplicaStatus.AVAILABLE.value, ReplicaStatus.PENDING.value}:
                     try:
-                        self.cos_service.delete_object(bucket, replica.object_key)
+                        self.cos_service.cleanup_object_uploads(bucket, replica.object_key)
                     except Exception:
                         self.log_service.app_log(
                             "WARNING",
                             __name__,
-                            "Canceled backup cleanup could not delete remote object.",
+                            "Canceled backup cleanup could not clean remote object uploads.",
                             detail=f"bucket_id={bucket.id}, object_key={replica.object_key}",
                         )
                 replica.upload_status = ReplicaStatus.DELETED.value
@@ -1182,6 +1174,13 @@ class BackupService:
 
         finalized_count = 0
         for run_request in self.repository.list_cancel_requested_running_run_requests():
+            for bucket_progress in run_request.bucket_progresses:
+                bucket = self.cos_repository.get_bucket(bucket_progress.bucket_id)
+                if bucket and bucket_progress.object_key:
+                    self.cos_service.cleanup_object_uploads(bucket, bucket_progress.object_key)
+                bucket_progress.status = JobStatus.CANCELED.value
+                bucket_progress.error_message = "备份作业已被手动终止"
+                self.session.add(bucket_progress)
             run_request.status = JobStatus.CANCELED.value
             run_request.current_step = "canceled"
             run_request.step_message = "备份作业已安全终止"
