@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, time
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, Time
+from sqlalchemy import BIGINT, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, Time
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -201,7 +201,7 @@ class BackupArtifact(Base):
     artifact_key: Mapped[str] = mapped_column(String(255), unique=True)
     source_path: Mapped[str] = mapped_column(Text)
     archive_name: Mapped[str] = mapped_column(String(255))
-    size_bytes: Mapped[int] = mapped_column(Integer)
+    size_bytes: Mapped[int] = mapped_column(BIGINT)
     sha256: Mapped[str] = mapped_column(String(128))
     zip_encrypted: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(64), default=JobStatus.PENDING.value)
@@ -224,8 +224,8 @@ class BackupRunRequest(Base):
     current_step: Mapped[str] = mapped_column(String(64), default="queued")
     step_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     step_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    step_total: Mapped[int] = mapped_column(Integer, default=0)
-    step_completed: Mapped[int] = mapped_column(Integer, default=0)
+    step_total: Mapped[int] = mapped_column(BIGINT, default=0)
+    step_completed: Mapped[int] = mapped_column(BIGINT, default=0)
     progress_percent: Mapped[int] = mapped_column(Integer, default=0)
     artifact_id: Mapped[int | None] = mapped_column(ForeignKey("backup_artifact.id"), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -249,8 +249,8 @@ class BackupRunBucketProgress(Base):
     bucket_region: Mapped[str] = mapped_column(String(64))
     object_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(64), default=JobStatus.PENDING.value)
-    total_bytes: Mapped[int] = mapped_column(Integer, default=0)
-    uploaded_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    total_bytes: Mapped[int] = mapped_column(BIGINT, default=0)
+    uploaded_bytes: Mapped[int] = mapped_column(BIGINT, default=0)
     progress_percent: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -269,7 +269,7 @@ class ArtifactReplica(Base):
     bucket_id: Mapped[int] = mapped_column(ForeignKey("cos_bucket.id"))
     object_key: Mapped[str] = mapped_column(String(255))
     etag: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BIGINT, nullable=True)
     upload_status: Mapped[str] = mapped_column(String(64), default=ReplicaStatus.PENDING.value)
     is_private_route_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
