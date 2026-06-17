@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
@@ -53,3 +53,24 @@ def get_db_session() -> Generator[Session, None, None]:
     with session_scope() as session:
         yield session
 
+
+def ensure_schema_compatibility() -> None:
+    """
+    Add lightweight compatibility columns required by newer application versions.
+
+    Returns:
+        None. Missing columns are created in place when possible.
+    """
+
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "backup_task" not in table_names:
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("backup_task")}
+    if "scheduled_at" in column_names:
+        return
+
+    column_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+    with engine.begin() as connection:
+        connection.execute(text(f"ALTER TABLE backup_task ADD COLUMN scheduled_at {column_type} NULL"))

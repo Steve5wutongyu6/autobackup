@@ -34,6 +34,7 @@ def _map_task(task) -> BackupTaskResponse:
         interval_minutes=task.interval_minutes,
         weekday_mask=task.weekday_mask,
         run_time=task.run_time,
+        scheduled_at=task.scheduled_at,
         enabled=task.enabled,
         bucket_ids=[link.bucket_id for link in task.buckets],
         created_at=task.created_at,
@@ -310,4 +311,3 @@ def list_restore_jobs(
     """
 
     return [_map_restore_job(item) for item in BackupService(session).list_restore_jobs()]
-

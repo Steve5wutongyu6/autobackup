@@ -28,6 +28,7 @@ class ScheduleType(StrEnum):
 
     INTERVAL = "interval"
     WEEKLY = "weekly"
+    ONCE = "once"
 
 
 class ReplicaStatus(StrEnum):
@@ -166,6 +167,7 @@ class BackupTask(Base):
     interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weekday_mask: Mapped[str | None] = mapped_column(String(32), nullable=True)
     run_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
@@ -276,4 +278,3 @@ class AppLog(Base):
     message: Mapped[str] = mapped_column(Text)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-

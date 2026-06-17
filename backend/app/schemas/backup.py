@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, time
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BackupTaskCreateRequest(BaseModel):
@@ -15,10 +15,11 @@ class BackupTaskCreateRequest(BaseModel):
         name: Task display name.
         source_path: Allowed filesystem path to archive.
         zip_password: AES ZIP password.
-        schedule_type: interval or weekly.
+        schedule_type: interval, weekly, or once.
         interval_minutes: Interval length for interval schedules.
-        weekday_mask: Comma-separated weekday numbers for weekly schedules.
+        weekday_mask: Comma-separated weekday names for weekly schedules.
         run_time: Daily trigger time for weekly schedules.
+        scheduled_at: Exact execution time for one-time schedules.
         enabled: Whether the task is active.
         bucket_ids: Target bucket IDs for upload.
     """
@@ -30,8 +31,44 @@ class BackupTaskCreateRequest(BaseModel):
     interval_minutes: int | None = Field(default=None, ge=1)
     weekday_mask: str | None = None
     run_time: time | None = None
+    scheduled_at: datetime | None = None
     enabled: bool = True
     bucket_ids: list[int] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_schedule_fields(self) -> "BackupTaskCreateRequest":
+        """
+        Validate schedule-specific fields according to the selected schedule type.
+
+        Returns:
+            The validated request model itself.
+
+        Raises:
+            ValueError: Raised when required fields for the selected schedule are missing.
+        """
+
+        if self.schedule_type == "interval":
+            if self.interval_minutes is None:
+                raise ValueError("固定间隔模式必须填写间隔分钟")
+            self.weekday_mask = None
+            self.run_time = None
+            self.scheduled_at = None
+        elif self.schedule_type == "weekly":
+            if not self.weekday_mask:
+                raise ValueError("固定星期模式必须选择星期几")
+            if self.run_time is None:
+                raise ValueError("固定星期模式必须填写执行时间")
+            self.interval_minutes = None
+            self.scheduled_at = None
+        elif self.schedule_type == "once":
+            if self.scheduled_at is None:
+                raise ValueError("单次任务模式必须填写执行日期时间")
+            self.interval_minutes = None
+            self.weekday_mask = None
+            self.run_time = None
+        else:
+            raise ValueError("不支持的调度类型")
+        return self
 
 
 class BackupTaskResponse(BaseModel):
@@ -42,10 +79,11 @@ class BackupTaskResponse(BaseModel):
         id: Task primary key.
         name: Task display name.
         source_path: Protected source path.
-        schedule_type: interval or weekly.
+        schedule_type: interval, weekly, or once.
         interval_minutes: Interval length when relevant.
         weekday_mask: Weekly days when relevant.
         run_time: Weekly trigger time when relevant.
+        scheduled_at: One-time execution datetime when relevant.
         enabled: Whether the task is active.
         bucket_ids: Linked target bucket IDs.
         created_at: Creation time.
@@ -59,6 +97,7 @@ class BackupTaskResponse(BaseModel):
     interval_minutes: int | None
     weekday_mask: str | None
     run_time: time | None
+    scheduled_at: datetime | None
     enabled: bool
     bucket_ids: list[int]
     created_at: datetime

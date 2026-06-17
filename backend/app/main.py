@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
-from app.db.base import Base, engine, session_scope
+from app.db.base import Base, engine, ensure_schema_compatibility, session_scope
 from app.services.auth_service import AuthService
 from app.services.log_service import LogService
 
@@ -32,6 +32,7 @@ async def lifespan(_: FastAPI):
     """
 
     Base.metadata.create_all(bind=engine)
+    ensure_schema_compatibility()
     with session_scope() as session:
         AuthService(session).ensure_bootstrap_admin()
         LogService(session).app_log("INFO", __name__, "API startup completed.")
@@ -59,4 +60,3 @@ def health() -> dict[str, str]:
     """
 
     return {"status": "ok", "app": settings.app_name}
-

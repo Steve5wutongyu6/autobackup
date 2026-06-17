@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.logging import configure_logging, get_logger
-from app.db.base import Base, engine, session_scope
+from app.db.base import Base, engine, ensure_schema_compatibility, session_scope
 from app.services.auth_service import AuthService
 from app.services.backup_service import BackupService
 
@@ -84,6 +87,19 @@ def build_scheduler() -> BlockingScheduler:
                     id=f"backup-task-{task.id}",
                     replace_existing=True,
                 )
+            elif task.schedule_type == "once" and task.scheduled_at:
+                scheduled_at = task.scheduled_at
+                current_time = datetime.now(scheduled_at.tzinfo) if scheduled_at.tzinfo else datetime.now()
+                if scheduled_at <= current_time:
+                    logger.warning("Skip expired one-time backup task %s at %s", task.id, scheduled_at.isoformat())
+                    continue
+                scheduler.add_job(
+                    _run_task,
+                    DateTrigger(run_date=scheduled_at),
+                    args=[task.id],
+                    id=f"backup-task-{task.id}",
+                    replace_existing=True,
+                )
     return scheduler
 
 
@@ -97,6 +113,7 @@ def main() -> None:
 
     configure_logging()
     Base.metadata.create_all(bind=engine)
+    ensure_schema_compatibility()
     with session_scope() as session:
         AuthService(session).ensure_bootstrap_admin()
     scheduler = build_scheduler()

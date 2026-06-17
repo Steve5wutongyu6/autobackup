@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import decrypt_text, encrypt_text, ensure_allowed_path, generate_random_id
 from app.models.entities import ArtifactReplica, BackupArtifact, BackupTask, JobStatus, ReplicaStatus, RestoreJob
+from app.models.entities import ScheduleType
 from app.repositories.backup import BackupRepository
 from app.repositories.cos import CosRepository
 from app.services.cos_service import CosService
@@ -58,6 +59,7 @@ class BackupService:
 
         normalized_source_path = str(ensure_allowed_path(str(payload["source_path"])))
         encrypted_password = encrypt_text(str(payload["zip_password"]), f"zip_password:{payload['name']}")
+        normalized_schedule = self._normalize_schedule_payload(payload)
         task = self.repository.get_task(task_id) if task_id else None
         if not task:
             task = BackupTask(
@@ -65,17 +67,18 @@ class BackupService:
                 source_path=normalized_source_path,
                 zip_password_ciphertext=encrypted_password["ciphertext"],
                 zip_password_nonce=encrypted_password["nonce"],
-                schedule_type=str(payload["schedule_type"]),
+                schedule_type=str(normalized_schedule["schedule_type"]),
             )
 
         task.name = str(payload["name"])
         task.source_path = normalized_source_path
         task.zip_password_ciphertext = encrypted_password["ciphertext"]
         task.zip_password_nonce = encrypted_password["nonce"]
-        task.schedule_type = str(payload["schedule_type"])
-        task.interval_minutes = payload.get("interval_minutes")
-        task.weekday_mask = payload.get("weekday_mask")
-        task.run_time = payload.get("run_time")
+        task.schedule_type = str(normalized_schedule["schedule_type"])
+        task.interval_minutes = normalized_schedule["interval_minutes"]
+        task.weekday_mask = normalized_schedule["weekday_mask"]
+        task.run_time = normalized_schedule["run_time"]
+        task.scheduled_at = normalized_schedule["scheduled_at"]
         task.enabled = bool(payload["enabled"])
 
         saved_task = self.repository.save_task(task)
@@ -89,6 +92,52 @@ class BackupService:
             detail=f"Backup task {saved_task.name} saved.",
         )
         return self.repository.get_task(saved_task.id) or saved_task
+
+    def _normalize_schedule_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        """
+        Normalize schedule fields so each schedule mode stores only its own relevant values.
+
+        Args:
+            payload: Raw task payload from the API layer.
+
+        Returns:
+            Dictionary containing normalized schedule fields.
+
+        Raises:
+            ValueError: Raised when the schedule type is not supported.
+        """
+
+        schedule_type = str(payload["schedule_type"])
+        interval_minutes = payload.get("interval_minutes")
+        weekday_mask = payload.get("weekday_mask")
+        run_time = payload.get("run_time")
+        scheduled_at = payload.get("scheduled_at")
+
+        if schedule_type == ScheduleType.INTERVAL.value:
+            return {
+                "schedule_type": schedule_type,
+                "interval_minutes": interval_minutes,
+                "weekday_mask": None,
+                "run_time": None,
+                "scheduled_at": None,
+            }
+        if schedule_type == ScheduleType.WEEKLY.value:
+            return {
+                "schedule_type": schedule_type,
+                "interval_minutes": None,
+                "weekday_mask": weekday_mask,
+                "run_time": run_time,
+                "scheduled_at": None,
+            }
+        if schedule_type == ScheduleType.ONCE.value:
+            return {
+                "schedule_type": schedule_type,
+                "interval_minutes": None,
+                "weekday_mask": None,
+                "run_time": None,
+                "scheduled_at": scheduled_at,
+            }
+        raise ValueError("Unsupported schedule type")
 
     def list_tasks(self) -> list[BackupTask]:
         """
