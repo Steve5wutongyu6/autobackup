@@ -212,6 +212,53 @@ class BackupArtifact(Base):
     restore_jobs: Mapped[list["RestoreJob"]] = relationship(back_populates="artifact")
 
 
+class BackupRunRequest(Base):
+    """Queued manual backup execution request consumed by the worker."""
+
+    __tablename__ = "backup_run_request"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("backup_task.id"))
+    trigger_source: Mapped[str] = mapped_column(String(64), default="manual")
+    status: Mapped[str] = mapped_column(String(64), default=JobStatus.PENDING.value)
+    current_step: Mapped[str] = mapped_column(String(64), default="queued")
+    step_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    step_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    step_total: Mapped[int] = mapped_column(Integer, default=0)
+    step_completed: Mapped[int] = mapped_column(Integer, default=0)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+    artifact_id: Mapped[int | None] = mapped_column(ForeignKey("backup_artifact.id"), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    bucket_progresses: Mapped[list["BackupRunBucketProgress"]] = relationship(back_populates="run_request")
+
+
+class BackupRunBucketProgress(Base):
+    """Upload progress snapshot for one bucket inside a backup run request."""
+
+    __tablename__ = "backup_run_bucket_progress"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_request_id: Mapped[int] = mapped_column(ForeignKey("backup_run_request.id"))
+    bucket_id: Mapped[int] = mapped_column(ForeignKey("cos_bucket.id"))
+    bucket_name: Mapped[str] = mapped_column(String(255))
+    bucket_region: Mapped[str] = mapped_column(String(64))
+    object_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(64), default=JobStatus.PENDING.value)
+    total_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    uploaded_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    run_request: Mapped["BackupRunRequest"] = relationship(back_populates="bucket_progresses")
+
+
 class ArtifactReplica(Base):
     """Stored copy of a logical backup in a specific bucket."""
 

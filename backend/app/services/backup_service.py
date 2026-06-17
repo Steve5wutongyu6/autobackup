@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
+from time import monotonic
+from typing import Callable
 from zipfile import ZIP_DEFLATED
 
 import pyzipper
@@ -16,7 +18,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import decrypt_text, encrypt_text, ensure_allowed_path, generate_random_id
-from app.models.entities import ArtifactReplica, BackupArtifact, BackupTask, JobStatus, ReplicaStatus, RestoreJob
+from app.models.entities import ArtifactReplica, BackupArtifact, BackupRunBucketProgress, BackupRunRequest, BackupTask
+from app.models.entities import JobStatus, ReplicaStatus, RestoreJob
 from app.models.entities import ScheduleType
 from app.repositories.backup import BackupRepository
 from app.repositories.cos import CosRepository
@@ -162,12 +165,125 @@ class BackupService:
 
         return self.repository.get_task(task_id)
 
-    def _build_archive(self, task: BackupTask) -> tuple[Path, str, str]:
+    def _commit_progress(self) -> None:
+        """
+        Persist in-flight progress updates so other processes can observe them immediately.
+
+        Returns:
+            None. The current SQLAlchemy transaction is committed in place.
+        """
+
+        self.session.commit()
+
+    def _update_run_request_step(
+        self,
+        run_request: BackupRunRequest,
+        step: str,
+        message: str,
+        unit: str | None = None,
+        total: int = 0,
+        completed: int = 0,
+        status: str | None = None,
+        commit: bool = True,
+    ) -> None:
+        """
+        Update the visible top-level progress state for one backup run request.
+
+        Args:
+            run_request: Run request entity to update.
+            step: Current execution step code.
+            message: Human-readable step detail.
+            unit: Unit for total and completed values.
+            total: Total work units in the current step.
+            completed: Completed work units in the current step.
+            status: Optional lifecycle status override.
+            commit: Whether to commit immediately after flushing.
+
+        Returns:
+            None. The run request row is updated in place.
+        """
+
+        safe_total = max(total, 0)
+        safe_completed = min(max(completed, 0), safe_total) if safe_total else max(completed, 0)
+        run_request.current_step = step
+        run_request.step_message = message
+        run_request.step_unit = unit
+        run_request.step_total = safe_total
+        run_request.step_completed = safe_completed
+        run_request.progress_percent = int((safe_completed / safe_total) * 100) if safe_total > 0 else 0
+        if status:
+            run_request.status = status
+        self.session.add(run_request)
+        self.session.flush()
+        if commit:
+            self._commit_progress()
+
+    def _collect_source_entries(self, source_path: Path) -> tuple[list[tuple[Path, Path, int]], int]:
+        """
+        Walk the source directory once and collect file metadata for compression progress tracking.
+
+        Args:
+            source_path: Backup source directory path.
+
+        Returns:
+            Tuple of file entries and total source byte count.
+        """
+
+        file_entries: list[tuple[Path, Path, int]] = []
+        total_bytes = 0
+        for root, _, files in os.walk(source_path):
+            for file_name in files:
+                absolute_path = Path(root) / file_name
+                file_size = absolute_path.stat().st_size
+                relative_path = absolute_path.relative_to(source_path.parent)
+                file_entries.append((absolute_path, relative_path, file_size))
+                total_bytes += file_size
+        return file_entries, total_bytes
+
+    def _calculate_file_sha256(
+        self,
+        file_path: Path,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> str:
+        """
+        Calculate SHA256 for one file with optional chunk-level progress callbacks.
+
+        Args:
+            file_path: File path to hash.
+            progress_callback: Optional callback receiving completed and total bytes.
+
+        Returns:
+            Hexadecimal SHA256 digest string.
+        """
+
+        total_bytes = file_path.stat().st_size
+        completed_bytes = 0
+        digest = hashlib.sha256()
+        with file_path.open("rb") as file_handle:
+            while True:
+                chunk = file_handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                completed_bytes += len(chunk)
+                if progress_callback:
+                    progress_callback(completed_bytes, total_bytes)
+        if progress_callback and total_bytes == 0:
+            progress_callback(0, 0)
+        return digest.hexdigest()
+
+    def _build_archive(
+        self,
+        task: BackupTask,
+        progress_callback: Callable[[str, int, int, int, int], None] | None = None,
+    ) -> tuple[Path, str, str]:
         """
         Build an AES ZIP archive and checksum for the task source directory.
 
         Args:
             task: Backup task entity.
+            progress_callback: Optional callback receiving step code, completed bytes,
+                total bytes, completed files, and total files during archive building.
 
         Returns:
             Tuple of archive path, archive filename, and SHA256 checksum.
@@ -177,6 +293,8 @@ class BackupService:
         zip_password = decrypt_text(task.zip_password_ciphertext, task.zip_password_nonce, f"zip_password:{task.name}")
         archive_name = f"{task.name}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}.zip"
         archive_path = settings.temp_dir / archive_name
+        file_entries, total_source_bytes = self._collect_source_entries(source_path)
+        total_files = len(file_entries)
         manifest = {
             "task_id": task.id,
             "task_name": task.name,
@@ -184,24 +302,44 @@ class BackupService:
             "created_at": datetime.now(UTC).isoformat(),
         }
 
+        if progress_callback:
+            progress_callback("compressing", 0, total_source_bytes, 0, total_files)
+
+        processed_source_bytes = 0
+        processed_files = 0
         with pyzipper.AESZipFile(archive_path, "w", compression=ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as archive:
             archive.setpassword(zip_password.encode("utf-8"))
-            for root, _, files in os.walk(source_path):
-                for file_name in files:
-                    absolute_path = Path(root) / file_name
-                    relative_path = absolute_path.relative_to(source_path.parent)
-                    archive.write(absolute_path, arcname=str(relative_path))
+            for absolute_path, relative_path, file_size in file_entries:
+                archive.write(absolute_path, arcname=str(relative_path))
+                processed_source_bytes += file_size
+                processed_files += 1
+                if progress_callback:
+                    progress_callback(
+                        "compressing",
+                        processed_source_bytes,
+                        total_source_bytes,
+                        processed_files,
+                        total_files,
+                    )
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
-        sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        if progress_callback:
+            progress_callback("checksumming", 0, archive_path.stat().st_size, total_files, total_files)
+        sha256 = self._calculate_file_sha256(
+            archive_path,
+            lambda completed, total: progress_callback("checksumming", completed, total, total_files, total_files)
+            if progress_callback
+            else None,
+        )
         return archive_path, archive_name, sha256
 
-    def run_task(self, task_id: int) -> BackupArtifact:
+    def run_task(self, task_id: int, run_request: BackupRunRequest | None = None) -> BackupArtifact:
         """
         Execute one backup task immediately, upload results, and clean up the archive.
 
         Args:
             task_id: Task primary key.
+            run_request: Optional persisted run request used for real-time progress tracking.
 
         Returns:
             Persisted logical backup artifact.
@@ -216,7 +354,50 @@ class BackupService:
         if not task.buckets:
             raise ValueError("Backup task has no target buckets")
 
-        archive_path, archive_name, sha256 = self._build_archive(task)
+        compression_state = {"last_commit_at": 0.0}
+
+        def handle_archive_progress(
+            step: str,
+            completed_bytes: int,
+            total_bytes: int,
+            processed_files: int,
+            total_files: int,
+        ) -> None:
+            """
+            Persist archive-building progress for the active run request.
+
+            Args:
+                step: Current archive step code.
+                completed_bytes: Completed byte count for the current step.
+                total_bytes: Total byte count for the current step.
+                processed_files: Processed file count during compression.
+                total_files: Total file count during compression.
+
+            Returns:
+                None. Progress is flushed and throttled commits are applied.
+            """
+
+            if not run_request:
+                return
+            if step == "compressing":
+                message = f"正在压缩文件 {processed_files}/{total_files}"
+            else:
+                message = "正在计算压缩包校验值"
+            should_commit = (monotonic() - compression_state["last_commit_at"]) >= 0.5 or completed_bytes >= total_bytes
+            self._update_run_request_step(
+                run_request,
+                step,
+                message,
+                unit="bytes",
+                total=total_bytes,
+                completed=completed_bytes,
+                status=JobStatus.RUNNING.value,
+                commit=should_commit,
+            )
+            if should_commit:
+                compression_state["last_commit_at"] = monotonic()
+
+        archive_path, archive_name, sha256 = self._build_archive(task, handle_archive_progress if run_request else None)
         size_bytes = archive_path.stat().st_size
         artifact = self.repository.save_artifact(
             BackupArtifact(
@@ -230,13 +411,82 @@ class BackupService:
                 status=JobStatus.RUNNING.value,
             )
         )
+        target_buckets = [self.cos_repository.get_bucket(task_bucket.bucket_id) for task_bucket in task.buckets]
+        available_buckets = [bucket for bucket in target_buckets if bucket]
+        expected_upload_bytes_total = size_bytes * len(available_buckets)
+
+        if run_request:
+            self._update_run_request_step(
+                run_request,
+                "uploading",
+                f"正在准备上传到 {len(available_buckets)} 个存储桶",
+                unit="bytes",
+                total=expected_upload_bytes_total,
+                completed=0,
+                status=JobStatus.RUNNING.value,
+            )
 
         success_count = 0
-        for task_bucket in task.buckets:
-            bucket = self.cos_repository.get_bucket(task_bucket.bucket_id)
-            if not bucket:
-                continue
+        bucket_progress_rows: list[BackupRunBucketProgress] = []
+        for bucket in available_buckets:
             object_key = f"autobackup/{task.name}/{archive_name}"
+            bucket_progress = None
+            bucket_commit_state = {"last_commit_at": 0.0}
+            if run_request:
+                bucket_progress = self.repository.save_bucket_progress(
+                    BackupRunBucketProgress(
+                        run_request_id=run_request.id,
+                        bucket_id=bucket.id,
+                        bucket_name=bucket.name,
+                        bucket_region=bucket.region,
+                        object_key=object_key,
+                        status=JobStatus.PENDING.value,
+                        total_bytes=size_bytes,
+                        uploaded_bytes=0,
+                        progress_percent=0,
+                    )
+                )
+                bucket_progress_rows.append(bucket_progress)
+                self._commit_progress()
+
+            def handle_upload_progress(uploaded_bytes: int, total_bytes: int) -> None:
+                """
+                Persist one bucket upload progress callback from the COS SDK.
+
+                Args:
+                    uploaded_bytes: Uploaded bytes already sent.
+                    total_bytes: Total bytes expected for this bucket upload.
+
+                Returns:
+                    None. Progress rows are updated in place.
+                """
+
+                if not run_request or not bucket_progress:
+                    return
+                safe_total = max(total_bytes, 0)
+                safe_uploaded = min(max(uploaded_bytes, 0), safe_total) if safe_total else max(uploaded_bytes, 0)
+                bucket_progress.status = JobStatus.RUNNING.value
+                bucket_progress.total_bytes = safe_total
+                bucket_progress.uploaded_bytes = safe_uploaded
+                bucket_progress.progress_percent = int((safe_uploaded / safe_total) * 100) if safe_total > 0 else 0
+                self.session.add(bucket_progress)
+                total_uploaded = sum(item.uploaded_bytes for item in bucket_progress_rows)
+                should_commit = (monotonic() - bucket_commit_state["last_commit_at"]) >= 0.5 or safe_uploaded >= safe_total
+                self._update_run_request_step(
+                    run_request,
+                    "uploading",
+                    f"正在上传到存储桶 {bucket.name} ({bucket.region})",
+                    unit="bytes",
+                    total=expected_upload_bytes_total,
+                    completed=total_uploaded,
+                    status=JobStatus.RUNNING.value,
+                    commit=False,
+                )
+                self.session.flush()
+                if should_commit:
+                    self._commit_progress()
+                    bucket_commit_state["last_commit_at"] = monotonic()
+
             replica = self.repository.save_replica(
                 ArtifactReplica(
                     artifact_id=artifact.id,
@@ -246,21 +496,63 @@ class BackupService:
                 )
             )
             try:
-                upload_result = self.cos_service.upload_file(bucket, object_key, str(archive_path))
+                upload_result = self.cos_service.upload_file(
+                    bucket,
+                    object_key,
+                    str(archive_path),
+                    progress_callback=handle_upload_progress if run_request else None,
+                )
                 replica.upload_status = ReplicaStatus.AVAILABLE.value
                 replica.etag = str(upload_result.get("ETag", ""))
                 replica.size_bytes = size_bytes
+                if bucket_progress:
+                    bucket_progress.status = JobStatus.SUCCESS.value
+                    bucket_progress.uploaded_bytes = size_bytes
+                    bucket_progress.total_bytes = size_bytes
+                    bucket_progress.progress_percent = 100
                 success_count += 1
             except Exception as error:
                 replica.upload_status = ReplicaStatus.FAILED.value
                 replica.error_message = str(error)
+                if bucket_progress:
+                    bucket_progress.status = JobStatus.FAILED.value
+                    bucket_progress.error_message = str(error)
             self.session.add(replica)
+            if bucket_progress:
+                self.session.add(bucket_progress)
             self.session.flush()
+            if run_request:
+                self._update_run_request_step(
+                    run_request,
+                    "uploading",
+                    f"已完成 {success_count}/{len(available_buckets)} 个存储桶上传",
+                    unit="bytes",
+                    total=expected_upload_bytes_total,
+                    completed=sum(item.uploaded_bytes for item in bucket_progress_rows),
+                    status=JobStatus.RUNNING.value,
+                )
 
         artifact.status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
         self.session.add(artifact)
         self.session.flush()
         archive_path.unlink(missing_ok=True)
+        if run_request:
+            final_status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
+            final_step = "completed" if success_count > 0 else "failed"
+            final_message = (
+                f"备份已完成，成功上传到 {success_count} 个存储桶"
+                if success_count > 0
+                else "备份执行失败，没有存储桶上传成功"
+            )
+            self._update_run_request_step(
+                run_request,
+                final_step,
+                final_message,
+                unit=None,
+                total=1,
+                completed=1 if success_count > 0 else 0,
+                status=final_status,
+            )
         self.log_service.audit(
             action="backup.task_run",
             actor="worker",
@@ -270,6 +562,152 @@ class BackupService:
             detail=f"Backup archive {archive_name} uploaded to {success_count} buckets.",
         )
         return self.repository.get_artifact(artifact.id) or artifact
+
+    def create_run_request(self, task_id: int, trigger_source: str, actor: str) -> BackupRunRequest:
+        """
+        Create one persisted backup run request row before worker execution starts.
+
+        Args:
+            task_id: Backup task primary key.
+            trigger_source: Source of the run request, such as manual or scheduler.
+            actor: Audit actor string for the queue event.
+
+        Returns:
+            Persisted backup run request entity.
+
+        Raises:
+            ValueError: Raised when the task does not exist or has no target buckets.
+        """
+
+        task = self.repository.get_task(task_id)
+        if not task:
+            raise ValueError("Backup task not found")
+        if not task.buckets:
+            raise ValueError("Backup task has no target buckets")
+
+        run_request = self.repository.save_run_request(
+            BackupRunRequest(
+                task_id=task.id,
+                trigger_source=trigger_source,
+                status=JobStatus.PENDING.value,
+                current_step="queued",
+                step_message="等待 worker 执行",
+                step_unit=None,
+                step_total=0,
+                step_completed=0,
+                progress_percent=0,
+            )
+        )
+        self.log_service.audit(
+            action="backup.task_enqueue",
+            actor=actor,
+            target_type="backup_task",
+            target_id=str(task.id),
+            outcome="success",
+            detail=f"Backup run queued with request id {run_request.id} from {trigger_source}.",
+        )
+        return run_request
+
+    def enqueue_task_run(self, task_id: int) -> BackupRunRequest:
+        """
+        Queue one manual backup execution for worker-side processing.
+
+        Args:
+            task_id: Backup task primary key.
+
+        Returns:
+            Persisted manual run request entity.
+        """
+
+        return self.create_run_request(task_id, trigger_source="manual", actor="admin")
+
+    def start_scheduled_task_run(self, task_id: int) -> BackupArtifact:
+        """
+        Create and execute one scheduler-triggered backup run request immediately.
+
+        Args:
+            task_id: Backup task primary key.
+
+        Returns:
+            Persisted logical backup artifact.
+        """
+
+        run_request = self.create_run_request(task_id, trigger_source="scheduler", actor="worker")
+        return self.execute_run_request(run_request.id)
+
+    def execute_run_request(self, run_request_id: int) -> BackupArtifact:
+        """
+        Execute one queued backup request inside the worker process.
+
+        Args:
+            run_request_id: Run request primary key.
+
+        Returns:
+            Persisted logical backup artifact.
+
+        Raises:
+            ValueError: Raised when the run request does not exist.
+            Exception: Re-raises backup execution failures after persisting failure state.
+        """
+
+        run_request = self.repository.get_run_request(run_request_id)
+        if not run_request:
+            raise ValueError("Backup run request not found")
+
+        run_request.started_at = datetime.now(UTC)
+        run_request.finished_at = None
+        run_request.error_message = None
+        self._update_run_request_step(
+            run_request,
+            "scanning",
+            "正在扫描源目录结构",
+            unit=None,
+            total=0,
+            completed=0,
+            status=JobStatus.RUNNING.value,
+        )
+        try:
+            artifact = self.run_task(run_request.task_id, run_request=run_request)
+            run_request.artifact_id = artifact.id
+            run_request.finished_at = datetime.now(UTC)
+            self.session.add(run_request)
+            self.session.flush()
+            self._commit_progress()
+            return artifact
+        except Exception as error:
+            run_request.finished_at = datetime.now(UTC)
+            run_request.error_message = str(error)
+            self._update_run_request_step(
+                run_request,
+                "failed",
+                f"备份失败: {error}",
+                unit=None,
+                total=0,
+                completed=0,
+                status=JobStatus.FAILED.value,
+            )
+            self.log_service.audit(
+                action="backup.task_enqueue_run",
+                actor="worker",
+                target_type="backup_run_request",
+                target_id=str(run_request.id),
+                outcome="failure",
+                detail=f"Queued manual backup failed: {error}",
+            )
+            raise
+
+    def list_run_requests(self, limit: int = 100) -> list[BackupRunRequest]:
+        """
+        Return recent backup run requests for the admin UI.
+
+        Args:
+            limit: Maximum number of run requests to return.
+
+        Returns:
+            Recent backup run request entities.
+        """
+
+        return self.repository.list_recent_run_requests(limit=limit)
 
     def list_artifacts(self) -> list[BackupArtifact]:
         """
@@ -500,3 +938,13 @@ class BackupService:
         """
 
         return self.repository.list_pending_restore_jobs()
+
+    def list_pending_run_requests(self) -> list[BackupRunRequest]:
+        """
+        Retrieve manual backup run requests that are ready to execute.
+
+        Returns:
+            Pending manual run request entities.
+        """
+
+        return self.repository.list_pending_run_requests()

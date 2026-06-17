@@ -30,7 +30,27 @@ def _run_task(task_id: int) -> None:
     """
 
     with session_scope() as session:
-        BackupService(session).run_task(task_id)
+        BackupService(session).start_scheduled_task_run(task_id)
+
+
+def _run_pending_backup_requests() -> None:
+    """
+    Execute queued manual backup requests in FIFO order.
+
+    Returns:
+        None. Pending backup requests are processed for their side effects.
+    """
+
+    with session_scope() as session:
+        service = BackupService(session)
+        for run_request in service.list_pending_run_requests():
+            try:
+                service.execute_run_request(run_request.id)
+            except Exception:
+                logger.exception(
+                    "Manual backup run request failed",
+                    extra={"run_request_id": run_request.id, "task_id": run_request.task_id},
+                )
 
 
 def _run_pending_restores() -> None:
@@ -44,7 +64,10 @@ def _run_pending_restores() -> None:
     with session_scope() as session:
         service = BackupService(session)
         for restore_job in service.list_pending_restore_jobs():
-            service.run_restore_job(restore_job.id)
+            try:
+                service.run_restore_job(restore_job.id)
+            except Exception:
+                logger.exception("Restore job failed", extra={"restore_job_id": restore_job.id})
 
 
 def build_scheduler() -> BlockingScheduler:
@@ -56,6 +79,12 @@ def build_scheduler() -> BlockingScheduler:
     """
 
     scheduler = BlockingScheduler()
+    scheduler.add_job(
+        _run_pending_backup_requests,
+        IntervalTrigger(seconds=15),
+        id="manual-backup-request-poller",
+        replace_existing=True,
+    )
     scheduler.add_job(
         _run_pending_restores,
         IntervalTrigger(minutes=1),

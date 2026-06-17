@@ -75,6 +75,53 @@
       </el-form>
     </el-card>
     <el-table :data="tasks" style="margin-top: 24px" border>
+      <el-table-column type="expand">
+        <template #default="{ row }">
+          <div v-if="getLatestRun(row.id)" class="run-progress-panel">
+            <div class="run-progress-header">
+              <el-tag :type="statusTagTypeMap[getLatestRun(row.id).status] || 'info'">
+                {{ formatRunStatus(getLatestRun(row.id)) }}
+              </el-tag>
+              <span class="run-progress-meta">
+                {{ formatRunSource(getLatestRun(row.id)) }} / {{ getLatestRun(row.id).updated_at }}
+              </span>
+            </div>
+            <div class="run-progress-step">{{ formatStepText(getLatestRun(row.id)) }}</div>
+            <el-progress
+              :percentage="getLatestRun(row.id).progress_percent"
+              :status="getLatestRun(row.id).status === 'failed' ? 'exception' : undefined"
+            />
+            <div class="run-progress-detail">{{ formatProgressDetail(getLatestRun(row.id)) }}</div>
+            <div v-if="getLatestRun(row.id).bucket_progresses.length" class="bucket-progress-list">
+              <div
+                v-for="bucketProgress in getLatestRun(row.id).bucket_progresses"
+                :key="bucketProgress.id"
+                class="bucket-progress-item"
+              >
+                <div class="bucket-progress-header">
+                  <span>{{ bucketProgress.bucket_name }} ({{ bucketProgress.bucket_region }})</span>
+                  <el-tag :type="statusTagTypeMap[bucketProgress.status] || 'info'" size="small">
+                    {{ formatBucketStatus(bucketProgress.status) }}
+                  </el-tag>
+                </div>
+                <el-progress
+                  :percentage="bucketProgress.progress_percent"
+                  :status="bucketProgress.status === 'failed' ? 'exception' : undefined"
+                  :stroke-width="12"
+                />
+                <div class="run-progress-detail">{{ formatBucketProgressDetail(bucketProgress) }}</div>
+                <div v-if="bucketProgress.error_message" class="run-progress-error">
+                  {{ bucketProgress.error_message }}
+                </div>
+              </div>
+            </div>
+            <div v-if="getLatestRun(row.id).error_message" class="run-progress-error">
+              {{ getLatestRun(row.id).error_message }}
+            </div>
+          </div>
+          <el-empty v-else description="暂无执行记录" :image-size="72" />
+        </template>
+      </el-table-column>
       <el-table-column prop="name" label="任务名称" />
       <el-table-column prop="source_path" label="源目录" />
       <el-table-column label="调度配置">
@@ -83,9 +130,22 @@
       <el-table-column prop="bucket_ids" label="目标桶">
         <template #default="{ row }">{{ row.bucket_ids.join(", ") }}</template>
       </el-table-column>
+      <el-table-column label="最近执行状态" min-width="280">
+        <template #default="{ row }">
+          <div v-if="getLatestRun(row.id)" class="table-run-summary">
+            <el-tag :type="statusTagTypeMap[getLatestRun(row.id).status] || 'info'" size="small">
+              {{ formatRunStatus(getLatestRun(row.id)) }}
+            </el-tag>
+            <span class="table-run-summary-text">{{ buildRunSummary(getLatestRun(row.id)) }}</span>
+          </div>
+          <span v-else>未执行</span>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="180">
         <template #default="{ row }">
-          <el-button size="small" type="success" @click="runTask(row.id)">立即执行</el-button>
+          <el-button size="small" type="success" :disabled="isTaskBusy(row.id)" @click="runTask(row.id)">
+            {{ isTaskBusy(row.id) ? "执行中" : "立即执行" }}
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -93,7 +153,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 
 import { request } from "../api/http";
@@ -108,8 +168,16 @@ const weekdayOptions = [
   { label: "周日", value: "sun" }
 ];
 const weekdayLabelMap = Object.fromEntries(weekdayOptions.map((item) => [item.value, item.label]));
+const statusTagTypeMap = {
+  pending: "info",
+  running: "warning",
+  success: "success",
+  failed: "danger"
+};
 const buckets = ref([]);
 const tasks = ref([]);
+const runRequests = ref([]);
+const runPollingTimer = ref(null);
 const selectedWeekdays = computed({
   get() {
     return taskForm.weekday_mask ? taskForm.weekday_mask.split(",").filter(Boolean) : [];
@@ -117,6 +185,15 @@ const selectedWeekdays = computed({
   set(value) {
     taskForm.weekday_mask = value.join(",");
   }
+});
+const latestRunMap = computed(() => {
+  const latestMap = {};
+  for (const runRequest of runRequests.value) {
+    if (!latestMap[runRequest.task_id]) {
+      latestMap[runRequest.task_id] = runRequest;
+    }
+  }
+  return latestMap;
 });
 const taskForm = reactive({
   name: "",
@@ -138,10 +215,21 @@ const taskForm = reactive({
  *   Promise that resolves after both lists are loaded.
  */
 async function loadData() {
-  [tasks.value, buckets.value] = await Promise.all([
+  [tasks.value, buckets.value, runRequests.value] = await Promise.all([
     request("/api/backup-tasks"),
-    request("/api/cos/buckets")
+    request("/api/cos/buckets"),
+    request("/api/backup-run-requests")
   ]);
+}
+
+/**
+ * Refresh only backup run progress data during the polling loop.
+ *
+ * Returns:
+ *   Promise that resolves after recent run requests are fetched.
+ */
+async function refreshRunRequests() {
+  runRequests.value = await request("/api/backup-run-requests");
 }
 
 /**
@@ -240,7 +328,7 @@ async function saveAndRunTask() {
     await request(`/api/backup-tasks/${savedTask.id}/run`, {
       method: "POST"
     });
-    ElMessage.success("任务已保存并开始执行");
+    ElMessage.success("任务已保存并已进入执行队列");
     await loadData();
   } catch (error) {
     ElMessage.error(error.message);
@@ -261,7 +349,8 @@ async function runTask(taskId) {
     await request(`/api/backup-tasks/${taskId}/run`, {
       method: "POST"
     });
-    ElMessage.success("备份任务已触发");
+    ElMessage.success("备份任务已进入执行队列");
+    await refreshRunRequests();
   } catch (error) {
     ElMessage.error(error.message);
   }
@@ -294,12 +383,259 @@ function formatSchedule(task) {
   return task.schedule_type;
 }
 
-onMounted(loadData);
+/**
+ * Return the most recent run request for one task.
+ *
+ * Args:
+ *   taskId: Backup task primary key.
+ *
+ * Returns:
+ *   Latest run request object or null when no runs exist.
+ */
+function getLatestRun(taskId) {
+  return latestRunMap.value[taskId] || null;
+}
+
+/**
+ * Check whether one task already has a queued or running backup.
+ *
+ * Args:
+ *   taskId: Backup task primary key.
+ *
+ * Returns:
+ *   True when the task currently has a queued or running execution.
+ */
+function isTaskBusy(taskId) {
+  const latestRun = getLatestRun(taskId);
+  return Boolean(latestRun && ["pending", "running"].includes(latestRun.status));
+}
+
+/**
+ * Convert one run request status into display text.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   Chinese status text string.
+ */
+function formatRunStatus(runRequest) {
+  const statusTextMap = {
+    pending: "排队中",
+    running: "执行中",
+    success: "成功",
+    failed: "失败"
+  };
+  return statusTextMap[runRequest.status] || runRequest.status;
+}
+
+/**
+ * Convert one run request source into display text.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   Chinese trigger source label.
+ */
+function formatRunSource(runRequest) {
+  return runRequest.trigger_source === "scheduler" ? "定时触发" : "手动触发";
+}
+
+/**
+ * Convert one step code and message into a readable step summary.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   Readable step summary string.
+ */
+function formatStepText(runRequest) {
+  const stepTextMap = {
+    queued: "等待 worker 执行",
+    scanning: "正在扫描源目录",
+    compressing: "正在压缩文件",
+    checksumming: "正在计算校验值",
+    uploading: "正在上传压缩包",
+    completed: "备份执行完成",
+    failed: "备份执行失败"
+  };
+  return runRequest.step_message || stepTextMap[runRequest.current_step] || runRequest.current_step;
+}
+
+/**
+ * Format one run request progress detail string.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   Detail string containing completed units and percent.
+ */
+function formatProgressDetail(runRequest) {
+  if (!runRequest.step_total || !runRequest.step_unit) {
+    return runRequest.finished_at ? `完成时间: ${runRequest.finished_at}` : "等待更多进度数据";
+  }
+  return `${runRequest.step_completed} / ${runRequest.step_total} ${runRequest.step_unit} (${runRequest.progress_percent}%)`;
+}
+
+/**
+ * Format one bucket upload status into display text.
+ *
+ * Args:
+ *   status: Bucket upload status code.
+ *
+ * Returns:
+ *   Chinese status text string.
+ */
+function formatBucketStatus(status) {
+  const statusTextMap = {
+    pending: "等待上传",
+    running: "上传中",
+    success: "上传成功",
+    failed: "上传失败"
+  };
+  return statusTextMap[status] || status;
+}
+
+/**
+ * Format one bucket progress detail string.
+ *
+ * Args:
+ *   bucketProgress: One bucket progress row from the API.
+ *
+ * Returns:
+ *   Detail string containing uploaded bytes and percent.
+ */
+function formatBucketProgressDetail(bucketProgress) {
+  if (!bucketProgress.total_bytes) {
+    return "等待上传开始";
+  }
+  return `${bucketProgress.uploaded_bytes} / ${bucketProgress.total_bytes} bytes (${bucketProgress.progress_percent}%)`;
+}
+
+/**
+ * Build a compact task-table summary for the most recent run.
+ *
+ * Args:
+ *   runRequest: Recent backup run request object.
+ *
+ * Returns:
+ *   Short summary string suitable for a table cell.
+ */
+function buildRunSummary(runRequest) {
+  return `${formatStepText(runRequest)} / ${runRequest.progress_percent}%`;
+}
+
+/**
+ * Start the run-progress polling timer.
+ *
+ * Returns:
+ *   None. A repeating timer is registered until the view is unmounted.
+ */
+function startRunPolling() {
+  stopRunPolling();
+  runPollingTimer.value = window.setInterval(async () => {
+    try {
+      await refreshRunRequests();
+    } catch (_) {
+      // Ignore transient polling failures and keep the next polling cycle alive.
+    }
+  }, 3000);
+}
+
+/**
+ * Stop the run-progress polling timer when the view is destroyed.
+ *
+ * Returns:
+ *   None. The timer is cleared when present.
+ */
+function stopRunPolling() {
+  if (runPollingTimer.value) {
+    window.clearInterval(runPollingTimer.value);
+    runPollingTimer.value = null;
+  }
+}
+
+onMounted(async () => {
+  await loadData();
+  startRunPolling();
+});
+
+onUnmounted(() => {
+  stopRunPolling();
+});
 </script>
 
 <style scoped>
 .task-actions {
   display: flex;
   gap: 12px;
+}
+
+.table-run-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-run-summary-text {
+  color: #4b5563;
+  line-height: 1.4;
+}
+
+.run-progress-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.run-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.run-progress-meta {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.run-progress-step {
+  font-weight: 600;
+  color: #111827;
+}
+
+.run-progress-detail {
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.run-progress-error {
+  color: #dc2626;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bucket-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bucket-progress-item {
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+}
+
+.bucket-progress-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 </style>

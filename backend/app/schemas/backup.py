@@ -202,3 +202,81 @@ class RestoreJobResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class BackupRunBucketProgressResponse(BaseModel):
+    """
+    Upload progress detail for one bucket inside a backup run.
+
+    Attributes:
+        id: Bucket progress primary key.
+        bucket_id: Target bucket ID.
+        bucket_name: Target bucket display name.
+        bucket_region: Target bucket region.
+        object_key: COS object key when assigned.
+        status: Upload lifecycle state.
+        total_bytes: Expected upload bytes for this bucket.
+        uploaded_bytes: Uploaded bytes already reported by COS SDK.
+        progress_percent: Upload percentage for this bucket.
+        error_message: Failure detail when present.
+        updated_at: Last progress update time.
+    """
+
+    id: int
+    bucket_id: int
+    bucket_name: str
+    bucket_region: str
+    object_key: str | None
+    status: str
+    total_bytes: int
+    uploaded_bytes: int
+    progress_percent: int
+    error_message: str | None
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupRunRequestResponse(BaseModel):
+    """
+    Real-time execution progress for one backup run request.
+
+    Attributes:
+        id: Run request primary key.
+        task_id: Source backup task ID.
+        trigger_source: manual or scheduler.
+        status: Run request lifecycle state.
+        current_step: Current execution step code.
+        step_message: Human-readable step detail string.
+        step_unit: Unit name for step_total and step_completed.
+        step_total: Total work units in the current step.
+        step_completed: Completed work units in the current step.
+        progress_percent: Current step percentage from 0 to 100.
+        artifact_id: Created logical artifact ID when available.
+        error_message: Failure detail when present.
+        started_at: Actual execution start time.
+        finished_at: Execution finish time when completed.
+        created_at: Queue creation time.
+        updated_at: Last progress update time.
+        bucket_progresses: Per-bucket upload progress rows.
+    """
+
+    id: int
+    task_id: int
+    trigger_source: str
+    status: str
+    current_step: str
+    step_message: str | None
+    step_unit: str | None
+    step_total: int
+    step_completed: int
+    progress_percent: int
+    artifact_id: int | None
+    error_message: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    bucket_progresses: list[BackupRunBucketProgressResponse]
+
+    model_config = ConfigDict(from_attributes=True)

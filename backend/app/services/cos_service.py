@@ -453,7 +453,13 @@ class CosService:
             "detail": detail,
         }
 
-    def upload_file(self, bucket: CosBucket, object_key: str, file_path: str) -> dict[str, object]:
+    def upload_file(
+        self,
+        bucket: CosBucket,
+        object_key: str,
+        file_path: str,
+        progress_callback: object | None = None,
+    ) -> dict[str, object]:
         """
         Upload a local file into a target bucket.
 
@@ -461,19 +467,21 @@ class CosService:
             bucket: Target bucket entity.
             object_key: COS object key.
             file_path: Local file path.
+            progress_callback: Optional COS SDK progress callback.
 
         Returns:
             SDK response dictionary.
         """
 
         client = self._build_client(bucket)
-        with open(file_path, "rb") as file_handle:
-            return client.put_object(
-                Bucket=f"{bucket.name}-{bucket.app_id}",
-                Body=file_handle,
-                Key=object_key,
-                EnableMD5=False,
-            )
+        return client.upload_file(
+            Bucket=f"{bucket.name}-{bucket.app_id}",
+            Key=object_key,
+            LocalFilePath=file_path,
+            MAXThread=1,
+            EnableMD5=False,
+            progress_callback=progress_callback,
+        )
 
     def delete_object(self, bucket: CosBucket, object_key: str) -> None:
         """

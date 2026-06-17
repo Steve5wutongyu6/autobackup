@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
-from app.schemas.backup import BackupArtifactResponse, BackupTaskCreateRequest, BackupTaskResponse
+from app.schemas.backup import BackupArtifactResponse, BackupRunRequestResponse, BackupTaskCreateRequest, BackupTaskResponse
 from app.schemas.backup import RestoreJobResponse, RestoreRequest
 from app.schemas.common import ApiMessage
 from app.services.backup_service import BackupService
@@ -90,6 +90,20 @@ def _map_restore_job(job) -> RestoreJobResponse:
     """
 
     return RestoreJobResponse.model_validate(job)
+
+
+def _map_run_request(run_request) -> BackupRunRequestResponse:
+    """
+    Convert a backup run request entity into an API response model.
+
+    Args:
+        run_request: ORM backup run request entity.
+
+    Returns:
+        Serialized backup run request response.
+    """
+
+    return BackupRunRequestResponse.model_validate(run_request)
 
 
 @router.post("/api/backup-tasks", response_model=BackupTaskResponse)
@@ -180,10 +194,10 @@ def update_task(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@router.post("/api/backup-tasks/{task_id}/run", response_model=BackupArtifactResponse)
-def run_task(task_id: int, _: int = Depends(require_admin), session: Session = Depends(get_db)) -> BackupArtifactResponse:
+@router.post("/api/backup-tasks/{task_id}/run", response_model=ApiMessage)
+def run_task(task_id: int, _: int = Depends(require_admin), session: Session = Depends(get_db)) -> ApiMessage:
     """
-    Trigger a backup task immediately.
+    Queue a backup task for immediate worker-side execution.
 
     Args:
         task_id: Backup task primary key.
@@ -191,12 +205,12 @@ def run_task(task_id: int, _: int = Depends(require_admin), session: Session = D
         session: Active SQLAlchemy session.
 
     Returns:
-        Resulting logical backup artifact.
+        Success message after the request is queued.
     """
 
     try:
-        artifact = BackupService(session).run_task(task_id)
-        return _map_artifact(artifact)
+        BackupService(session).enqueue_task_run(task_id)
+        return ApiMessage(message="Backup task queued")
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -215,6 +229,22 @@ def list_artifacts(_: int = Depends(require_admin), session: Session = Depends(g
     """
 
     return [_map_artifact(item) for item in BackupService(session).list_artifacts()]
+
+
+@router.get("/api/backup-run-requests", response_model=list[BackupRunRequestResponse])
+def list_run_requests(_: int = Depends(require_admin), session: Session = Depends(get_db)) -> list[BackupRunRequestResponse]:
+    """
+    List recent backup run requests with real-time execution progress.
+
+    Args:
+        _: Authenticated administrator ID.
+        session: Active SQLAlchemy session.
+
+    Returns:
+        Backup run request response list.
+    """
+
+    return [_map_run_request(item) for item in BackupService(session).list_run_requests()]
 
 
 @router.delete("/api/artifacts/{artifact_id}", response_model=ApiMessage)

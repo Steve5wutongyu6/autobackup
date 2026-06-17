@@ -5,7 +5,8 @@ from __future__ import annotations
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.entities import ArtifactReplica, BackupArtifact, BackupTask, BackupTaskBucket, RestoreJob
+from app.models.entities import ArtifactReplica, BackupArtifact, BackupRunBucketProgress, BackupRunRequest, BackupTask
+from app.models.entities import BackupTaskBucket, RestoreJob
 from app.models.entities import JobStatus
 
 
@@ -104,6 +105,38 @@ class BackupRepository:
         self.session.refresh(artifact)
         return artifact
 
+    def save_run_request(self, run_request: BackupRunRequest) -> BackupRunRequest:
+        """
+        Persist a manual backup run request.
+
+        Args:
+            run_request: Run request entity to persist.
+
+        Returns:
+            Saved run request entity.
+        """
+
+        self.session.add(run_request)
+        self.session.flush()
+        self.session.refresh(run_request)
+        return run_request
+
+    def save_bucket_progress(self, bucket_progress: BackupRunBucketProgress) -> BackupRunBucketProgress:
+        """
+        Persist one bucket upload progress row.
+
+        Args:
+            bucket_progress: Bucket progress entity to persist.
+
+        Returns:
+            Saved bucket progress entity.
+        """
+
+        self.session.add(bucket_progress)
+        self.session.flush()
+        self.session.refresh(bucket_progress)
+        return bucket_progress
+
     def save_replica(self, replica: ArtifactReplica) -> ArtifactReplica:
         """
         Persist an artifact replica.
@@ -165,6 +198,58 @@ class BackupRepository:
         """
 
         self.session.delete(artifact)
+
+    def get_run_request(self, run_request_id: int) -> BackupRunRequest | None:
+        """
+        Fetch one manual backup run request by primary key.
+
+        Args:
+            run_request_id: Run request primary key.
+
+        Returns:
+            Matching run request entity or None.
+        """
+
+        statement = (
+            select(BackupRunRequest)
+            .options(selectinload(BackupRunRequest.bucket_progresses))
+            .where(BackupRunRequest.id == run_request_id)
+        )
+        return self.session.scalar(statement)
+
+    def list_pending_run_requests(self) -> list[BackupRunRequest]:
+        """
+        List manual backup run requests ready for worker execution.
+
+        Returns:
+            Pending run request entities ordered by creation time.
+        """
+
+        statement = (
+            select(BackupRunRequest)
+            .where(BackupRunRequest.status == JobStatus.PENDING.value)
+            .order_by(BackupRunRequest.created_at.asc())
+        )
+        return list(self.session.scalars(statement))
+
+    def list_recent_run_requests(self, limit: int = 20) -> list[BackupRunRequest]:
+        """
+        List recent backup run requests with bucket progress details.
+
+        Args:
+            limit: Maximum number of run requests to return.
+
+        Returns:
+            Recent run request entities ordered by newest first.
+        """
+
+        statement = (
+            select(BackupRunRequest)
+            .options(selectinload(BackupRunRequest.bucket_progresses))
+            .order_by(BackupRunRequest.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(statement))
 
     def save_restore_job(self, restore_job: RestoreJob) -> RestoreJob:
         """
