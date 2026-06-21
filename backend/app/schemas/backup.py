@@ -73,6 +73,17 @@ class BackupTaskCreateRequest(BaseModel):
         return self
 
 
+class BackupTaskUpdateRequest(BackupTaskCreateRequest):
+    """
+    Request payload for updating a backup task.
+
+    Attributes:
+        zip_password: New AES ZIP password, or None to keep the existing password.
+    """
+
+    zip_password: str | None = Field(default=None, min_length=1, max_length=255)
+
+
 class BackupTaskResponse(BaseModel):
     """
     Backup task summary for listing and detail views.

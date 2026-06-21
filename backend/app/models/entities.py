@@ -173,7 +173,10 @@ class BackupTask(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
-    buckets: Mapped[list["BackupTaskBucket"]] = relationship(back_populates="task")
+    buckets: Mapped[list["BackupTaskBucket"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
     artifacts: Mapped[list["BackupArtifact"]] = relationship(back_populates="task")
 
 

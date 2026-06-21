@@ -214,6 +214,25 @@ class BackupRepository:
         )
         return list(self.session.scalars(statement))
 
+    def list_artifacts_for_task(self, task_id: int) -> list[BackupArtifact]:
+        """
+        List all artifacts for one task with replicas loaded.
+
+        Args:
+            task_id: Backup task primary key.
+
+        Returns:
+            Artifact entities ordered from newest to oldest.
+        """
+
+        statement = (
+            select(BackupArtifact)
+            .options(selectinload(BackupArtifact.replicas))
+            .where(BackupArtifact.task_id == task_id)
+            .order_by(BackupArtifact.created_at.desc(), BackupArtifact.id.desc())
+        )
+        return list(self.session.scalars(statement))
+
     def delete_artifact(self, artifact: BackupArtifact) -> None:
         """
         Delete a logical artifact row.
@@ -347,6 +366,40 @@ class BackupRepository:
             .order_by(BackupRunRequest.created_at.desc())
         )
         return list(self.session.scalars(statement))
+
+    def delete_run_requests_for_task(self, task_id: int) -> None:
+        """
+        Delete run request history and progress rows for one task.
+
+        Args:
+            task_id: Backup task primary key.
+
+        Returns:
+            None. Matching rows are removed from the current session.
+        """
+
+        run_request_ids = list(
+            self.session.scalars(select(BackupRunRequest.id).where(BackupRunRequest.task_id == task_id))
+        )
+        if not run_request_ids:
+            return
+        self.session.execute(
+            delete(BackupRunBucketProgress).where(BackupRunBucketProgress.run_request_id.in_(run_request_ids))
+        )
+        self.session.execute(delete(BackupRunRequest).where(BackupRunRequest.id.in_(run_request_ids)))
+
+    def delete_task(self, task: BackupTask) -> None:
+        """
+        Delete a backup task row.
+
+        Args:
+            task: Backup task entity to delete.
+
+        Returns:
+            None. The task row is removed from the current session.
+        """
+
+        self.session.delete(task)
 
     def save_restore_job(self, restore_job: RestoreJob) -> RestoreJob:
         """

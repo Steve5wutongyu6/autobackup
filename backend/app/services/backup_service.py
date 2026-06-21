@@ -91,10 +91,12 @@ class BackupService:
         """
 
         normalized_source_path = str(ensure_allowed_path(str(payload["source_path"])))
-        encrypted_password = encrypt_text(str(payload["zip_password"]), f"zip_password:{payload['name']}")
         normalized_schedule = self._normalize_schedule_payload(payload)
         task = self.repository.get_task(task_id) if task_id else None
         if not task:
+            if not payload.get("zip_password"):
+                raise ValueError("ZIP password is required")
+            encrypted_password = encrypt_text(str(payload["zip_password"]), f"zip_password:{payload['name']}")
             task = BackupTask(
                 name=str(payload["name"]),
                 source_path=normalized_source_path,
@@ -103,10 +105,19 @@ class BackupService:
                 schedule_type=str(normalized_schedule["schedule_type"]),
             )
 
-        task.name = str(payload["name"])
+        previous_name = task.name
+        next_name = str(payload["name"])
+        if payload.get("zip_password"):
+            encrypted_password = encrypt_text(str(payload["zip_password"]), f"zip_password:{next_name}")
+            task.zip_password_ciphertext = encrypted_password["ciphertext"]
+            task.zip_password_nonce = encrypted_password["nonce"]
+        elif previous_name != next_name:
+            zip_password = decrypt_text(task.zip_password_ciphertext, task.zip_password_nonce, f"zip_password:{previous_name}")
+            encrypted_password = encrypt_text(zip_password, f"zip_password:{next_name}")
+            task.zip_password_ciphertext = encrypted_password["ciphertext"]
+            task.zip_password_nonce = encrypted_password["nonce"]
+        task.name = next_name
         task.source_path = normalized_source_path
-        task.zip_password_ciphertext = encrypted_password["ciphertext"]
-        task.zip_password_nonce = encrypted_password["nonce"]
         task.schedule_type = str(normalized_schedule["schedule_type"])
         task.interval_minutes = normalized_schedule["interval_minutes"]
         task.weekday_mask = normalized_schedule["weekday_mask"]
@@ -195,6 +206,44 @@ class BackupService:
         """
 
         return self.repository.get_task(task_id)
+
+    def delete_task(self, task_id: int) -> None:
+        """
+        Delete a backup task and all backup state that depends on it.
+
+        Args:
+            task_id: Backup task primary key.
+
+        Returns:
+            None. Artifacts, replicas, restore jobs, run history, bucket links, and the task are removed.
+
+        Raises:
+            ValueError: Raised when the task is missing or has active runs.
+        """
+
+        task = self.repository.get_task(task_id)
+        if not task:
+            raise ValueError("Backup task not found")
+        if self.repository.list_active_run_requests_for_task(task_id):
+            raise ValueError("Cannot delete a task with queued or running backup jobs")
+
+        artifacts = self.repository.list_artifacts_for_task(task_id)
+        for artifact in artifacts:
+            self.delete_artifact(
+                artifact.id,
+                actor="admin",
+                detail=f"Artifact {artifact.id} deleted with backup task {task_id}.",
+            )
+        self.repository.delete_run_requests_for_task(task_id)
+        self.repository.delete_task(task)
+        self.log_service.audit(
+            action="backup.task_delete",
+            actor="admin",
+            target_type="backup_task",
+            target_id=str(task_id),
+            outcome="success",
+            detail=f"Backup task {task.name} deleted with dependent backup state.",
+        )
 
     def _commit_progress(self) -> None:
         """

@@ -81,8 +81,11 @@
           </el-col>
         </el-row>
         <div class="task-actions">
-          <el-button type="primary" @click="saveTask">保存任务</el-button>
-          <el-button type="success" plain @click="saveAndRunTask">保存并立即执行一次</el-button>
+          <el-button type="primary" @click="saveTask">{{ editingTaskId ? "保存修改" : "保存任务" }}</el-button>
+          <el-button type="success" plain @click="saveAndRunTask">
+            {{ editingTaskId ? "保存修改并立即执行一次" : "保存并立即执行一次" }}
+          </el-button>
+          <el-button v-if="editingTaskId" @click="resetTaskForm">取消编辑</el-button>
         </div>
       </el-form>
     </el-card>
@@ -156,8 +159,9 @@
           <span v-else>未执行</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180">
+      <el-table-column label="操作" width="300">
         <template #default="{ row }">
+          <el-button size="small" @click="editTask(row)">编辑</el-button>
           <el-button size="small" type="success" :disabled="isTaskBusy(row.id)" @click="runTask(row.id)">
             {{ isTaskBusy(row.id) ? "执行中" : "立即执行" }}
           </el-button>
@@ -171,6 +175,9 @@
           >
             {{ isCancelPending(getLatestRun(row.id)) ? "终止中" : "终止" }}
           </el-button>
+          <el-button size="small" type="danger" :disabled="isTaskBusy(row.id)" @click="deleteTask(row)">
+            删除
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -179,7 +186,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 import { request } from "../api/http";
 
@@ -204,6 +211,7 @@ const buckets = ref([]);
 const tasks = ref([]);
 const runRequests = ref([]);
 const runPollingTimer = ref(null);
+const editingTaskId = ref(null);
 const selectedWeekdays = computed({
   get() {
     return taskForm.weekday_mask ? taskForm.weekday_mask.split(",").filter(Boolean) : [];
@@ -235,6 +243,30 @@ const taskForm = reactive({
   enabled: true,
   bucket_ids: []
 });
+
+/**
+ * Reset the task form to creation mode defaults.
+ *
+ * Returns:
+ *   None. Form state is replaced in place.
+ */
+function resetTaskForm() {
+  editingTaskId.value = null;
+  Object.assign(taskForm, {
+    name: "",
+    source_path: "",
+    zip_password: "",
+    schedule_type: "interval",
+    interval_minutes: 60,
+    weekday_mask: "mon",
+    run_time: "03:00:00",
+    scheduled_at: "",
+    retention_enabled: false,
+    retention_count: 5,
+    enabled: true,
+    bucket_ids: []
+  });
+}
 
 /**
  * Load task and bucket data for the task management view.
@@ -301,6 +333,9 @@ function handleScheduleTypeChange(scheduleType) {
 function buildTaskPayload() {
   const { retention_enabled: _retentionEnabled, ...taskPayload } = taskForm;
   taskPayload.retention_count = taskForm.retention_enabled ? taskForm.retention_count : null;
+  if (editingTaskId.value && !taskPayload.zip_password) {
+    taskPayload.zip_password = null;
+  }
   if (taskForm.schedule_type === "interval") {
     return {
       ...taskPayload,
@@ -332,11 +367,12 @@ function buildTaskPayload() {
  */
 async function saveTask() {
   try {
-    await request("/api/backup-tasks", {
-      method: "POST",
+    await request(editingTaskId.value ? `/api/backup-tasks/${editingTaskId.value}` : "/api/backup-tasks", {
+      method: editingTaskId.value ? "PUT" : "POST",
       body: JSON.stringify(buildTaskPayload())
     });
-    ElMessage.success("任务已保存");
+    ElMessage.success(editingTaskId.value ? "任务已更新" : "任务已保存");
+    resetTaskForm();
     await loadData();
   } catch (error) {
     ElMessage.error(error.message);
@@ -351,17 +387,80 @@ async function saveTask() {
  */
 async function saveAndRunTask() {
   try {
-    const savedTask = await request("/api/backup-tasks", {
-      method: "POST",
+    const savedTask = await request(editingTaskId.value ? `/api/backup-tasks/${editingTaskId.value}` : "/api/backup-tasks", {
+      method: editingTaskId.value ? "PUT" : "POST",
       body: JSON.stringify(buildTaskPayload())
     });
     await request(`/api/backup-tasks/${savedTask.id}/run`, {
       method: "POST"
     });
-    ElMessage.success("任务已保存并已进入执行队列");
+    ElMessage.success(editingTaskId.value ? "任务已更新并已进入执行队列" : "任务已保存并已进入执行队列");
+    resetTaskForm();
     await loadData();
   } catch (error) {
     ElMessage.error(error.message);
+  }
+}
+
+/**
+ * Load a task row into the form for editing.
+ *
+ * Args:
+ *   task: Task row object returned by the backend.
+ *
+ * Returns:
+ *   None. Form state switches to edit mode.
+ */
+function editTask(task) {
+  editingTaskId.value = task.id;
+  Object.assign(taskForm, {
+    name: task.name,
+    source_path: task.source_path,
+    zip_password: "",
+    schedule_type: task.schedule_type,
+    interval_minutes: task.interval_minutes || 60,
+    weekday_mask: task.weekday_mask || "mon",
+    run_time: task.run_time || "03:00:00",
+    scheduled_at: task.scheduled_at || "",
+    retention_enabled: Boolean(task.retention_count),
+    retention_count: task.retention_count || 5,
+    enabled: task.enabled,
+    bucket_ids: [...task.bucket_ids]
+  });
+}
+
+/**
+ * Delete one backup task after confirmation.
+ *
+ * Args:
+ *   task: Task row object returned by the backend.
+ *
+ * Returns:
+ *   Promise that resolves after the task is deleted and data is refreshed.
+ */
+async function deleteTask(task) {
+  try {
+    await ElMessageBox.confirm(
+      "删除任务会同时删除该任务产生的备份文件、COS 副本、恢复作业和执行历史，是否继续？",
+      `删除任务 ${task.name}`,
+      {
+        confirmButtonText: "删除",
+        cancelButtonText: "取消",
+        type: "warning"
+      }
+    );
+    await request(`/api/backup-tasks/${task.id}`, {
+      method: "DELETE"
+    });
+    if (editingTaskId.value === task.id) {
+      resetTaskForm();
+    }
+    ElMessage.success("任务已删除");
+    await loadData();
+  } catch (error) {
+    if (!["cancel", "close"].includes(error)) {
+      ElMessage.error(error.message || "删除已取消");
+    }
   }
 }
 

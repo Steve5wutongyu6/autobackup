@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
 from app.schemas.backup import BackupArtifactResponse, BackupRunRequestResponse, BackupTaskCreateRequest, BackupTaskResponse
+from app.schemas.backup import BackupTaskUpdateRequest
 from app.schemas.backup import RestoreJobResponse, RestoreRequest
 from app.schemas.common import ApiMessage
 from app.services.backup_service import BackupService
@@ -171,7 +172,7 @@ def get_task(task_id: int, _: int = Depends(require_admin), session: Session = D
 @router.put("/api/backup-tasks/{task_id}", response_model=BackupTaskResponse)
 def update_task(
     task_id: int,
-    payload: BackupTaskCreateRequest,
+    payload: BackupTaskUpdateRequest,
     _: int = Depends(require_admin),
     session: Session = Depends(get_db),
 ) -> BackupTaskResponse:
@@ -191,6 +192,31 @@ def update_task(
     try:
         task = BackupService(session).create_or_update_task(task_id, payload.model_dump())
         return _map_task(task)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.delete("/api/backup-tasks/{task_id}", response_model=ApiMessage)
+def delete_task(
+    task_id: int,
+    _: int = Depends(require_admin),
+    session: Session = Depends(get_db),
+) -> ApiMessage:
+    """
+    Delete an existing backup task and dependent backup state.
+
+    Args:
+        task_id: Backup task primary key.
+        _: Authenticated administrator ID.
+        session: Active SQLAlchemy session.
+
+    Returns:
+        Success message.
+    """
+
+    try:
+        BackupService(session).delete_task(task_id)
+        return ApiMessage(message="Backup task deleted")
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
