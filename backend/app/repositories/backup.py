@@ -186,6 +186,34 @@ class BackupRepository:
         )
         return self.session.scalar(statement)
 
+    def list_success_artifacts_exceeding_retention(
+        self,
+        task_id: int,
+        keep_count: int,
+    ) -> list[BackupArtifact]:
+        """
+        List successful artifacts older than the retained newest set for one task.
+
+        Args:
+            task_id: Backup task primary key.
+            keep_count: Number of newest successful artifacts to keep.
+
+        Returns:
+            Successful artifact entities ordered from newest prunable to oldest.
+        """
+
+        statement = (
+            select(BackupArtifact)
+            .options(selectinload(BackupArtifact.replicas))
+            .where(
+                BackupArtifact.task_id == task_id,
+                BackupArtifact.status == JobStatus.SUCCESS.value,
+            )
+            .order_by(BackupArtifact.created_at.desc(), BackupArtifact.id.desc())
+            .offset(keep_count)
+        )
+        return list(self.session.scalars(statement))
+
     def delete_artifact(self, artifact: BackupArtifact) -> None:
         """
         Delete a logical artifact row.

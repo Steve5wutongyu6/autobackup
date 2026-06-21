@@ -20,6 +20,7 @@ class BackupTaskCreateRequest(BaseModel):
         weekday_mask: Comma-separated weekday names for weekly schedules.
         run_time: Daily trigger time for weekly schedules.
         scheduled_at: Exact execution time for one-time schedules.
+        retention_count: Number of recent successful artifacts to keep, or None for unlimited.
         enabled: Whether the task is active.
         bucket_ids: Target bucket IDs for upload.
     """
@@ -32,6 +33,7 @@ class BackupTaskCreateRequest(BaseModel):
     weekday_mask: str | None = None
     run_time: time | None = None
     scheduled_at: datetime | None = None
+    retention_count: int | None = Field(default=None, ge=1)
     enabled: bool = True
     bucket_ids: list[int] = Field(min_length=1)
 
@@ -84,6 +86,7 @@ class BackupTaskResponse(BaseModel):
         weekday_mask: Weekly days when relevant.
         run_time: Weekly trigger time when relevant.
         scheduled_at: One-time execution datetime when relevant.
+        retention_count: Number of recent successful artifacts to keep, or None for unlimited.
         enabled: Whether the task is active.
         bucket_ids: Linked target bucket IDs.
         created_at: Creation time.
@@ -98,6 +101,7 @@ class BackupTaskResponse(BaseModel):
     weekday_mask: str | None
     run_time: time | None
     scheduled_at: datetime | None
+    retention_count: int | None
     enabled: bool
     bucket_ids: list[int]
     created_at: datetime

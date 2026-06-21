@@ -75,6 +75,7 @@ def ensure_schema_compatibility() -> None:
         return
 
     _ensure_backup_task_scheduled_at(inspector, table_names)
+    _ensure_backup_task_retention_count(inspector, table_names)
     _ensure_backup_run_request_cancel_requested(inspector, table_names)
     _ensure_large_byte_count_columns(inspector, table_names)
 
@@ -101,6 +102,29 @@ def _ensure_backup_task_scheduled_at(inspector, table_names: set[str]) -> None:
     column_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
     with engine.begin() as connection:
         connection.execute(text(f"ALTER TABLE backup_task ADD COLUMN scheduled_at {column_type} NULL"))
+
+
+def _ensure_backup_task_retention_count(inspector, table_names: set[str]) -> None:
+    """
+    Add the retention_count column for older backup_task tables when missing.
+
+    Args:
+        inspector: SQLAlchemy inspector bound to the current engine.
+        table_names: Existing table names discovered from the database.
+
+    Returns:
+        None. The compatibility column is added in place when missing.
+    """
+
+    if "backup_task" not in table_names:
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("backup_task")}
+    if "retention_count" in column_names:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE backup_task ADD COLUMN retention_count INTEGER NULL"))
 
 
 def _ensure_backup_run_request_cancel_requested(inspector, table_names: set[str]) -> None:

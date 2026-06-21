@@ -112,6 +112,7 @@ class BackupService:
         task.weekday_mask = normalized_schedule["weekday_mask"]
         task.run_time = normalized_schedule["run_time"]
         task.scheduled_at = normalized_schedule["scheduled_at"]
+        task.retention_count = payload.get("retention_count")
         task.enabled = bool(payload["enabled"])
 
         saved_task = self.repository.save_task(task)
@@ -678,6 +679,8 @@ class BackupService:
             artifact.status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
             self.session.add(artifact)
             self.session.flush()
+            if success_count > 0:
+                self._prune_old_artifacts(task)
             if run_request:
                 final_status = JobStatus.SUCCESS.value if success_count > 0 else JobStatus.FAILED.value
                 final_step = "completed" if success_count > 0 else "failed"
@@ -960,12 +963,44 @@ class BackupService:
 
         return self.repository.list_artifacts()
 
-    def delete_artifact(self, artifact_id: int) -> None:
+    def _prune_old_artifacts(self, task: BackupTask) -> None:
+        """
+        Delete old successful artifacts exceeding the task retention count.
+
+        Args:
+            task: Backup task whose successful artifact history should be pruned.
+
+        Returns:
+            None. Old remote objects and database rows are removed when retention is enabled.
+        """
+
+        if not task.retention_count:
+            return
+
+        old_artifacts = self.repository.list_success_artifacts_exceeding_retention(
+            task.id,
+            task.retention_count,
+        )
+        for artifact in old_artifacts:
+            self.delete_artifact(
+                artifact.id,
+                actor="worker",
+                detail=f"Artifact {artifact.id} deleted by retention policy for task {task.id}.",
+            )
+
+    def delete_artifact(
+        self,
+        artifact_id: int,
+        actor: str = "admin",
+        detail: str | None = None,
+    ) -> None:
         """
         Delete a logical artifact from all buckets and remove its database rows.
 
         Args:
             artifact_id: Artifact primary key.
+            actor: Audit actor string.
+            detail: Optional audit detail override.
 
         Returns:
             None. Related COS objects and rows are deleted.
@@ -993,11 +1028,11 @@ class BackupService:
         self.repository.delete_artifact(artifact)
         self.log_service.audit(
             action="artifact.delete",
-            actor="admin",
+            actor=actor,
             target_type="backup_artifact",
             target_id=str(artifact_id),
             outcome="success",
-            detail=f"Artifact {artifact_id} deleted across configured replicas.",
+            detail=detail or f"Artifact {artifact_id} deleted across configured replicas.",
         )
 
     def start_restore(self, artifact_id: int, restore_path: str) -> RestoreJob:

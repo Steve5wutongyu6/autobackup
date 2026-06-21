@@ -35,6 +35,7 @@ def _map_task(task) -> BackupTaskResponse:
         weekday_mask=task.weekday_mask,
         run_time=task.run_time,
         scheduled_at=task.scheduled_at,
+        retention_count=task.retention_count,
         enabled=task.enabled,
         bucket_ids=[link.bucket_id for link in task.buckets],
         created_at=task.created_at,

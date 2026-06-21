@@ -68,6 +68,18 @@
             />
           </el-select>
         </el-form-item>
+        <el-row :gutter="20">
+          <el-col :md="8" :span="24">
+            <el-form-item label="滚动保留">
+              <el-switch v-model="taskForm.retention_enabled" active-text="启用" inactive-text="不限制" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="taskForm.retention_enabled" :md="8" :span="24">
+            <el-form-item label="仅保留最近">
+              <el-input-number v-model="taskForm.retention_count" :min="1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
         <div class="task-actions">
           <el-button type="primary" @click="saveTask">保存任务</el-button>
           <el-button type="success" plain @click="saveAndRunTask">保存并立即执行一次</el-button>
@@ -129,6 +141,9 @@
       </el-table-column>
       <el-table-column prop="bucket_ids" label="目标桶">
         <template #default="{ row }">{{ row.bucket_ids.join(", ") }}</template>
+      </el-table-column>
+      <el-table-column label="滚动保留">
+        <template #default="{ row }">{{ formatRetention(row) }}</template>
       </el-table-column>
       <el-table-column label="最近执行状态" min-width="280">
         <template #default="{ row }">
@@ -215,6 +230,8 @@ const taskForm = reactive({
   weekday_mask: "mon",
   run_time: "03:00:00",
   scheduled_at: "",
+  retention_enabled: false,
+  retention_count: 5,
   enabled: true,
   bucket_ids: []
 });
@@ -282,9 +299,11 @@ function handleScheduleTypeChange(scheduleType) {
  *   Task payload object ready for the backend API.
  */
 function buildTaskPayload() {
+  const { retention_enabled: _retentionEnabled, ...taskPayload } = taskForm;
+  taskPayload.retention_count = taskForm.retention_enabled ? taskForm.retention_count : null;
   if (taskForm.schedule_type === "interval") {
     return {
-      ...taskForm,
+      ...taskPayload,
       weekday_mask: null,
       run_time: null,
       scheduled_at: null
@@ -292,13 +311,13 @@ function buildTaskPayload() {
   }
   if (taskForm.schedule_type === "weekly") {
     return {
-      ...taskForm,
+      ...taskPayload,
       interval_minutes: null,
       scheduled_at: null
     };
   }
   return {
-    ...taskForm,
+    ...taskPayload,
     interval_minutes: null,
     weekday_mask: null,
     run_time: null
@@ -413,6 +432,19 @@ function formatSchedule(task) {
     return `单次任务 / ${task.scheduled_at || "未设定"}`;
   }
   return task.schedule_type;
+}
+
+/**
+ * Format the task backup retention policy.
+ *
+ * Args:
+ *   task: Task row object returned by the backend.
+ *
+ * Returns:
+ *   Human-readable retention description.
+ */
+function formatRetention(task) {
+  return task.retention_count ? `最近 ${task.retention_count} 份` : "不限制";
 }
 
 /**
