@@ -988,6 +988,8 @@ class BackupService:
                     replica.error_message = str(error)
             self.session.add(replica)
 
+        self.repository.clear_run_request_artifact_references(artifact_id)
+        self.repository.delete_restore_jobs_for_artifact(artifact_id)
         self.repository.delete_artifact(artifact)
         self.log_service.audit(
             action="artifact.delete",

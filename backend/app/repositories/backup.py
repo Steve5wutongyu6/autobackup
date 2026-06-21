@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.entities import ArtifactReplica, BackupArtifact, BackupRunBucketProgress, BackupRunRequest, BackupTask
@@ -198,6 +198,36 @@ class BackupRepository:
         """
 
         self.session.delete(artifact)
+
+    def clear_run_request_artifact_references(self, artifact_id: int) -> None:
+        """
+        Remove artifact references from backup run history rows.
+
+        Args:
+            artifact_id: Artifact primary key being deleted.
+
+        Returns:
+            None. Matching run request rows keep their history with a null artifact link.
+        """
+
+        self.session.execute(
+            update(BackupRunRequest)
+            .where(BackupRunRequest.artifact_id == artifact_id)
+            .values(artifact_id=None)
+        )
+
+    def delete_restore_jobs_for_artifact(self, artifact_id: int) -> None:
+        """
+        Delete restore jobs that depend on an artifact being removed.
+
+        Args:
+            artifact_id: Artifact primary key being deleted.
+
+        Returns:
+            None. Matching restore job rows are removed from the current session.
+        """
+
+        self.session.execute(delete(RestoreJob).where(RestoreJob.artifact_id == artifact_id))
 
     def get_run_request(self, run_request_id: int) -> BackupRunRequest | None:
         """

@@ -208,8 +208,14 @@ class BackupArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     task: Mapped["BackupTask"] = relationship(back_populates="artifacts")
-    replicas: Mapped[list["ArtifactReplica"]] = relationship(back_populates="artifact")
-    restore_jobs: Mapped[list["RestoreJob"]] = relationship(back_populates="artifact")
+    replicas: Mapped[list["ArtifactReplica"]] = relationship(
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+    )
+    restore_jobs: Mapped[list["RestoreJob"]] = relationship(
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+    )
 
 
 class BackupRunRequest(Base):
